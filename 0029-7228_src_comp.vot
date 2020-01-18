@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Produced with astropy.io.votable version 2.0.6
+     http://www.astropy.org/ -->
+<VOTABLE version="1.3" xmlns="http://www.ivoa.net/xml/VOTable/v1.3" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.ivoa.net/xml/VOTable/v1.3">
+ <DESCRIPTION>
+  {'DATE': '2019-07-15 22:54:07', 'PROGRAM': 'AegeanTools.catalogs',
+  'PROGVER': '1.0-(2016-07-26)'}
+ </DESCRIPTION>
+ <RESOURCE type="results">
+  <TABLE>
+   <FIELD ID="island" datatype="long" name="island"/>
+   <FIELD ID="source" datatype="long" name="source"/>
+   <FIELD ID="background" datatype="float" name="background"/>
+   <FIELD ID="local_rms" datatype="float" name="local_rms"/>
+   <FIELD ID="ra_str" arraysize="11" datatype="char" name="ra_str"/>
+   <FIELD ID="dec_str" arraysize="12" datatype="char" name="dec_str"/>
+   <FIELD ID="ra" datatype="double" name="ra"/>
+   <FIELD ID="err_ra" datatype="double" name="err_ra"/>
+   <FIELD ID="dec" datatype="double" name="dec"/>
+   <FIELD ID="err_dec" datatype="double" name="err_dec"/>
+   <FIELD ID="peak_flux" datatype="double" name="peak_flux"/>
+   <FIELD ID="err_peak_flux" datatype="double" name="err_peak_flux"/>
+   <FIELD ID="int_flux" datatype="double" name="int_flux"/>
+   <FIELD ID="err_int_flux" datatype="double" name="err_int_flux"/>
+   <FIELD ID="a" datatype="double" name="a"/>
+   <FIELD ID="err_a" datatype="double" name="err_a"/>
+   <FIELD ID="b" datatype="double" name="b"/>
+   <FIELD ID="err_b" datatype="double" name="err_b"/>
+   <FIELD ID="pa" datatype="double" name="pa"/>
+   <FIELD ID="err_pa" datatype="double" name="err_pa"/>
+   <FIELD ID="flags" datatype="long" name="flags"/>
+   <FIELD ID="residual_mean" datatype="double" name="residual_mean"/>
+   <FIELD ID="residual_std" datatype="double" name="residual_std"/>
+   <FIELD ID="uuid" arraysize="36" datatype="char" name="uuid"/>
+   <FIELD ID="psf_a" datatype="double" name="psf_a"/>
+   <FIELD ID="psf_b" datatype="double" name="psf_b"/>
+   <FIELD ID="psf_pa" datatype="double" name="psf_pa"/>
+   <DATA>
+    <TABLEDATA>
+     <TR>
+      <TD>1</TD>
+      <TD>0</TD>
+      <TD>-3.2945863e-06</TD>
+      <TD>0.00036169097</TD>
+      <TD>00:29:55.81</TD>
+      <TD>-72:32:21.47</TD>
+      <TD>7.482530590810143</TD>
+      <TD>0.0002810784633910493</TD>
+      <TD>-72.53929586884881</TD>
+      <TD>0.000254141370945149</TD>
+      <TD>0.0016093369309189678</TD>
+      <TD>0.00033182853728701885</TD>
+      <TD>0.004053912037366903</TD>
+      <TD>0.0015777191309617607</TD>
+      <TD>8.406332071433926</TD>
+      <TD>1.6085366712798461</TD>
+      <TD>7.611237280501934</TD>
+      <TD>2.0470714964074115</TD>
+      <TD>4.6307475784418175</TD>
+      <TD>3.23464808078756</TD>
+      <TD>0</TD>
+      <TD>-0.000265474986122588</TD>
+      <TD>0.00013619213620804524</TD>
+      <TD>de9b7a67-2d1c-4421-8fcb-5b90daa942a8</TD>
+      <TD>5.38044590502</TD>
+      <TD>3.4957284573456</TD>
+      <TD>11.9954214096</TD>
+     </TR>
+     <TR>
+      <TD>2</TD>
+      <TD>0</TD>
+      <TD>2.6144028e-06</TD>
+      <TD>0.00035797086</TD>
+      <TD>00:28:19.95</TD>
+      <TD>-72:31:57.02</TD>
+      <TD>7.083110235194623</TD>
+      <TD>2.1229981586773522e-05</TD>
+      <TD>-72.53250494683394</TD>
+      <TD>3.248696965840736e-05</TD>
+      <TD>0.007671286930365038</TD>
+      <TD>0.000351350295639134</TD>
+      <TD>0.0062340478582587336</TD>
+      <TD>0.0003235476833593575</TD>
+      <TD>5.812635261065177</TD>
+      <TD>0.09228061386192778</TD>
+      <TD>3.5507158935767267</TD>
+      <TD>0.06584380699577443</TD>
+      <TD>0.45199785268593756</TD>
+      <TD>0.034224249909745985</TD>
+      <TD>0</TD>
+      <TD>0.00013471235903319482</TD>
+      <TD>0.0002871725040774029</TD>
+      <TD>e39d2b5c-19a8-4a6f-867d-9587c69f8f67</TD>
+      <TD>5.38044590502</TD>
+      <TD>3.4957284573456</TD>
+      <TD>11.9954214096</TD>
+     </TR>
+     <TR>
+      <TD>3</TD>
+      <TD>0</TD>
+      <TD>5.556205e-06</TD>
+      <TD>0.00041804614</TD>
+      <TD>00:29:18.91</TD>
+      <TD>-72:28:11.38</TD>
+      <TD>7.328790874787955</TD>
+      <TD>2.2274375342523574e-06</TD>
+      <TD>-72.4698283429656</TD>
+      <TD>3.2920799526436895e-06</TD>
+      <TD>0.0881198255844052</TD>
+      <TD>0.00041160583355757485</TD>
+      <TD>0.07299281977422453</TD>
+      <TD>0.0003867710714130695</TD>
+      <TD>5.806584552639783</TD>
+      <TD>0.009422118176876028</TD>
+      <TD>3.6194474480854524</TD>
+      <TD>0.0068919200050842865</TD>
+      <TD>0.518979019482041</TD>
+      <TD>0.0037365560943986575</TD>
+      <TD>0</TD>
+      <TD>0.0008143063926083383</TD>
+      <TD>0.0028947688333699553</TD>
+      <TD>8b58b827-a361-433e-a46b-5235f8718eaa</TD>
+      <TD>5.38044590502</TD>
+      <TD>3.4957284573456</TD>
+      <TD>11.9954214096</TD>
+     </TR>
+    </TABLEDATA>
+   </DATA>
+  </TABLE>
+ </RESOURCE>
+</VOTABLE>
