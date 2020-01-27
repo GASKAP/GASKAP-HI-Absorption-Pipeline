@@ -50,6 +50,8 @@ def parseargs():
                         type=int, default=500)
     parser.add_argument("-c", "--concurrency_limit", help="The maximum number of concurrent processes allowed to run.",
                         type=int, default=12)
+    parser.add_argument("--pbs", help="Run the jobs via PBS qsub command", default=False,
+                        action='store_true')
     args = parser.parse_args()
     return args
 
@@ -104,7 +106,7 @@ def build_map(image_params):
     return src_beam_map
 
 
-def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids, completed_srcs, concurrency_limit):
+def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids, completed_srcs, concurrency_limit, use_pbs):
     rate_limited = False
     # Take a copy of the list to avoid issues when removing items from it
     ids_to_scan = list(remaining_array_ids)
@@ -149,14 +151,17 @@ def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remain
             print('Starting {} (#{}) concurrency {} ms: {}'.format(
                 comp_name, array_id, len(active_ids), tgt_ms))
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
-            run_os_cmd('./start_job.sh {}'.format(array_id))
+            if use_pbs:
+                run_os_cmd('qsub -t {0} -N "ASKAP_abs_cutout_{0}" ./start_job.sh'.format(array_id))
+            else:
+                run_os_cmd('./start_job.sh {}'.format(array_id))
         elif not rate_limited:
             rate_limited = True
             print (' rate limit of {} applied'.format(concurrency_limit))
     return len(active_ids)
 
 
-def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, max_loops=500):
+def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, use_pbs, max_loops=500):
     remaining_array_ids = list(range(1, len(targets)+1))
     active_ms = set()
     active_ids = set()
@@ -170,7 +175,7 @@ def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency
         print("\nLoop #{}, completed {} remaining {}".format(
             i, len(completed_srcs), len(remaining_array_ids)))
         total_concurrency += job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids,
-                                      completed_srcs, concurrency_limit)
+                                      completed_srcs, concurrency_limit, use_pbs)
         if len(remaining_array_ids) > 0:
             time.sleep(delay)
 
@@ -198,7 +203,7 @@ def main():
 
     # Run through the processing
     produce_all_cutouts(targets, args.status_folder,
-                        src_beam_map, args.delay, args.concurrency_limit, max_loops=args.max_loops)
+                        src_beam_map, args.delay, args.concurrency_limit, args.pbs, max_loops=args.max_loops)
 
     # Report
     end = time.time()
