@@ -35,7 +35,7 @@ def main():
     for beam in beams:
         num = beam[0:2]
         interleave = beam[2]
-        vis_name='scienceData_SB8906_SMC1-0_M344-11{}.beam{}_SL.ms'.format(interleave, num)
+        vis_name='../msdata/altered/8906/SMC1-0_M344-11{0}/scienceData_SB8906_SMC1-0_M344-11{0}.beam{1}_SL.ms'.format(interleave, num)
         vis.append(vis_name)
 
     print 'Processing input visibilities of ' + str(vis)
@@ -47,7 +47,7 @@ def main():
     tclean (vis=vis,specmode='cube',imagename=image_name,reffreq='1.42040571183GHz',restfreq='1.42040571183GHz',
       phasecenter=phasecenter,imsize=50,uvrange=uvdist,
       gridder='standard', width='1km/s',
-      vptable='ASKAP_AIRY_BP.tab')
+      vptable='../ASKAP_AIRY_BP.tab')
     exportfits(imagename=image_name+'.image', fitsimage=fits_name,velocity=True)
 
     return

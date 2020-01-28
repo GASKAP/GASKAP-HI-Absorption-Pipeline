@@ -152,7 +152,7 @@ def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remain
                 comp_name, array_id, len(active_ids), tgt_ms))
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
             if use_pbs:
-                run_os_cmd('qsub -t {0} -N "ASKAP_abs_cutout_{0}" ./start_job.sh'.format(array_id))
+                run_os_cmd('qsub -J {0}-{1}:2 -N "ASKAP_abs{0}" ./start_job.sh'.format(array_id,array_id+1))
             else:
                 run_os_cmd('./start_job.sh {}'.format(array_id))
         elif not rate_limited:
@@ -172,8 +172,8 @@ def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency
     i = 0
     while len(remaining_array_ids) > 0 and i < max_loops:
         i += 1
-        print("\nLoop #{}, completed {} remaining {}".format(
-            i, len(completed_srcs), len(remaining_array_ids)))
+        print("\nLoop #{}, completed {} remaining {} at {}".format(
+            i, len(completed_srcs), len(remaining_array_ids), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))), flush=True)
         total_concurrency += job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids,
                                       completed_srcs, concurrency_limit, use_pbs)
         if len(remaining_array_ids) > 0:
