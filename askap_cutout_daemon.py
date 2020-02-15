@@ -45,6 +45,8 @@ def parseargs():
                         action='store_true')
     parser.add_argument("-l", "--log_folder", help="The folder which will contain the stdout and stderr files from the jobs",
                         default='logs/8906')
+    parser.add_argument("-a", "--active", help="The numerical component index of an active cutout job. The job will be monitored as if this daemon started it",
+                        type=int, action='append')
     args = parser.parse_args()
     return args
 
@@ -97,6 +99,21 @@ def build_map(image_params):
         beams = src_beam_map[comp_name]
         beams.add(beam_id)
     return src_beam_map
+
+
+def register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs):
+    for array_id in pre_active_jobs:
+        comp_name = targets[array_id-1]
+        tgt_ms = src_beam_map[comp_name]
+
+        for ms in tgt_ms:
+            active_ms.add(ms)
+        active_ids.add(array_id)
+        # print ('+++ ' + str(active_ids))
+        print('Registered active job {} (#{}) concurrency {} ms: {}'.format(
+            comp_name, array_id, len(active_ids), tgt_ms))
+    return len(active_ids)
+
 
 def mark_comp_done(array_id, tgt_ms, active_ids, active_ms):
     active_ids.remove(array_id)
@@ -167,7 +184,7 @@ def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remain
     return len(active_ids)
 
 
-def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, use_pbs, log_folder, max_loops=500):
+def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, use_pbs, log_folder, pre_active_jobs, max_loops=500):
     remaining_array_ids = list(range(1, len(targets)+1))
     active_ms = set()
     active_ids = set()
@@ -176,6 +193,8 @@ def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency
 
     total_concurrency = 0
     print('Processing {} targets'.format(len(remaining_array_ids)))
+
+    total_concurrency += register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs)
     i = 0
     while len(remaining_array_ids) > 0 and i < max_loops:
         i += 1
@@ -205,15 +224,17 @@ def main():
     print("#### Started ASKAP cutout production at %s ####" %
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))
 
-    print ('Checking every {} seconds for completed jobs, wiht a maximum of {} checks.'.format(args.delay, args.max_loops))
+    print ('Checking every {} seconds for completed jobs, with a maximum of {} checks.'.format(args.delay, args.max_loops))
     
     # Prepare the run
     targets, image_params = read_image_params(args.filename)
     src_beam_map = build_map(image_params)
 
+    if args.active:
+        print ("Already acive jobs: {}".format(args.active))
     # Run through the processing
     produce_all_cutouts(targets, args.status_folder, src_beam_map, args.delay, args.concurrency_limit, args.pbs,
-                        args.log_folder, max_loops=args.max_loops)
+                        args.log_folder, args.active, max_loops=args.max_loops)
 
     # Report
     end = time.time()
