@@ -12,4 +12,13 @@ export SAMPLE_ID
 casa --nologger --log2term -c sub_cube_abs.py
 
 # Mark the job as complete
+retval=$?
+echo "Return value=${retval}"
+if [ $retval -ne 0 ]; then
+    echo "Job failed"
+    echo `date` > ${status_folder}/${SAMPLE_ID}.FAILED
+    exit 1
+fi
+
 echo `date` > ${status_folder}/${SAMPLE_ID}.COMPLETED
+exit 0
