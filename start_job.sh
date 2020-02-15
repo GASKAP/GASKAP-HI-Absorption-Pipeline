@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 ##### Select resources #####
 #PBS -N ASKAP_Abs_Cutout
-#PBS -l ncpus=3
+#PBS -l select=1:ncpus=3:mem=40g
+#PBS -l place=vscatter
 #PBS -l walltime=10:00:00
 ##### Queue #####
 #PBS -q smallmem
