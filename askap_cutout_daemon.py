@@ -7,21 +7,12 @@
 
 import argparse
 import datetime
-# import math
+
 import os
 import subprocess
 import sys
 import time
-# from collections import deque
 
-# from astropy.io import ascii
-# from astropy.coordinates import SkyCoord, Angle
-# from astropy.io import fits, votable
-# from astropy.wcs import WCS
-# import numpy as np
-# import numpy.core.records as rec
-# from astropy import units as u
-# from astropy.table import QTable, Table, Column
 from astropy.io.votable import parse_single_table
 
 
@@ -52,6 +43,8 @@ def parseargs():
                         type=int, default=12)
     parser.add_argument("--pbs", help="Run the jobs via PBS qsub command", default=False,
                         action='store_true')
+    parser.add_argument("-l", "--log_folder", help="The folder which will contain the stdout and stderr files from the jobs",
+                        default='logs/8906')
     args = parser.parse_args()
     return args
 
@@ -105,30 +98,41 @@ def build_map(image_params):
         beams.add(beam_id)
     return src_beam_map
 
+def mark_comp_done(array_id, tgt_ms, active_ids, active_ms):
+    active_ids.remove(array_id)
+    for ms in tgt_ms:
+        active_ms.remove(ms)
 
-def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids, completed_srcs, concurrency_limit, use_pbs):
+
+def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids, completed_srcs,
+             failed_srcs, concurrency_limit, use_pbs, log_folder):
     rate_limited = False
     # Take a copy of the list to avoid issues when removing items from it
     ids_to_scan = list(remaining_array_ids)
     # Scan for completed jobs
     for array_id in ids_to_scan:
         comp_name = targets[array_id-1]
-        if comp_name in completed_srcs:
+        if comp_name in completed_srcs or comp_name in failed_srcs:
             continue
 
         if os.path.isfile('{}/{:d}.COMPLETED'.format(status_folder, array_id)):
             # print ('--- ' + str(active_ids))
             if array_id in active_ids:
-                print('Completed {}  (#{}) concurrency {}'.format(
-                    comp_name, array_id, len(active_ids)))
-                active_ids.remove(array_id)
-                tgt_ms = src_beam_map[comp_name]
-                for ms in tgt_ms:
-                    active_ms.remove(ms)
+                print('Completed {}  (#{}) concurrency {}'.format(comp_name, array_id, len(active_ids)))
+                mark_comp_done(array_id, src_beam_map[comp_name], active_ids, active_ms)
             else:
-                print(' Skipping {} (#{}) as it has already completed'.format(
-                    comp_name, array_id))
+                print(' Skipping {} (#{}) as it has already completed'.format(comp_name, array_id))
             completed_srcs.add(comp_name)
+            remaining_array_ids.remove(array_id)
+            continue
+
+        if os.path.isfile('{}/{:d}.FAILED'.format(status_folder, array_id)):
+            if array_id in active_ids:
+                print('Failed {}  (#{}) concurrency {}'.format(comp_name, array_id, len(active_ids)))
+                mark_comp_done(array_id, src_beam_map[comp_name], active_ids, active_ms)
+            else:
+                print(' Skipping {} (#{}) as it has already failed'.format(comp_name, array_id))
+            failed_srcs.add(comp_name)
             remaining_array_ids.remove(array_id)
             continue
 
@@ -152,7 +156,9 @@ def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remain
                 comp_name, array_id, len(active_ids), tgt_ms))
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
             if use_pbs:
-                run_os_cmd('qsub -J {0}-{1}:2 -N "ASKAP_abs{0}" ./start_job.sh'.format(array_id,array_id+1))
+                run_os_cmd(
+                    ('qsub -v COMP_INDEX={0} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
+                     '-e {1}/askap_abs_{0}_e.log ./start_job.sh').format(array_id, log_folder))
             else:
                 run_os_cmd('./start_job.sh {}'.format(array_id))
         elif not rate_limited:
@@ -161,21 +167,23 @@ def job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remain
     return len(active_ids)
 
 
-def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, use_pbs, max_loops=500):
+def produce_all_cutouts(targets, status_folder, src_beam_map, delay, concurrency_limit, use_pbs, log_folder, max_loops=500):
     remaining_array_ids = list(range(1, len(targets)+1))
     active_ms = set()
     active_ids = set()
     completed_srcs = set()
+    failed_srcs = set()
 
     total_concurrency = 0
     print('Processing {} targets'.format(len(remaining_array_ids)))
     i = 0
     while len(remaining_array_ids) > 0 and i < max_loops:
         i += 1
-        print("\nLoop #{}, completed {} remaining {} at {}".format(
-            i, len(completed_srcs), len(remaining_array_ids), time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))), flush=True)
+        print("\nLoop #{}, completed {} failed {} remaining {} at {}".format(
+            i, len(completed_srcs), len(failed_srcs), len(remaining_array_ids), 
+            time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))), flush=True)
         total_concurrency += job_loop(targets, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids,
-                                      completed_srcs, concurrency_limit, use_pbs)
+                                      completed_srcs, failed_srcs, concurrency_limit, use_pbs, log_folder)
         if len(remaining_array_ids) > 0:
             time.sleep(delay)
 
@@ -197,13 +205,15 @@ def main():
     print("#### Started ASKAP cutout production at %s ####" %
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))
 
+    print ('Checking every {} seconds for completed jobs, wiht a maximum of {} checks.'.format(args.delay, args.max_loops))
+    
     # Prepare the run
     targets, image_params = read_image_params(args.filename)
     src_beam_map = build_map(image_params)
 
     # Run through the processing
-    produce_all_cutouts(targets, args.status_folder,
-                        src_beam_map, args.delay, args.concurrency_limit, args.pbs, max_loops=args.max_loops)
+    produce_all_cutouts(targets, args.status_folder, src_beam_map, args.delay, args.concurrency_limit, args.pbs,
+                        args.log_folder, max_loops=args.max_loops)
 
     # Report
     end = time.time()
