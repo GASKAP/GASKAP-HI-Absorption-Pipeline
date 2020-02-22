@@ -4,12 +4,14 @@
 # The cutout will exclude large scale emission and thus be tuned for absorption usage.
 
 SAMPLE_ID="$1"
-status_folder="$2"
+SBID="$2"
+status_folder="$3"
 
 # Run the cutout script in CASA
 export SAMPLE_ID
-#casa -c sub_cube_abs.py
-casa --nologger --log2term -c sub_cube_abs.py
+export SBID
+
+casa --nologger --log2term -c sub_cube_abs_retry.py
 
 # Mark the job as complete
 retval=$?
