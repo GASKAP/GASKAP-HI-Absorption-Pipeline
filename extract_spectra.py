@@ -4,7 +4,7 @@
 # Author James Dempsey
 # Date 19 Feb 2020
 
-
+import argparse
 import csv 
 import glob
 import os
@@ -34,6 +34,23 @@ import astropy.units as u
 from RadioAbsTools import cube_tools, spectrum_tools
 
 
+def parseargs():
+    """
+    Parse the command line arguments
+    :return: An args map with the parsed arguments
+    """
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     description="Produce absorption spectra from a set of subcubes")
+    parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
+                        type=int, required=True)
+    parser.add_argument("-c", "--catalogue", help="The catalgoue of source positions and characteristics",
+                        required=True)
+    parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
+                        required=False)
+    args = parser.parse_args()
+    return args
+
+
 def output_spectra(velocity, opacity, flux, filename, 
                    sigma_tau):
     """
@@ -55,14 +72,14 @@ def output_spectra(velocity, opacity, flux, filename,
     writeto(votable, filename)
 
 
-def read_targets():
+def read_targets(targets_file):
     ids=[]
     comp_names=[]
     ras=[]
     decs=[]
     beams=[]
     i=1
-    with open('targets.csv', 'r') as csvfile:
+    with open(targets_file, 'r') as csvfile:
         tgt_reader = csv.reader(csvfile, delimiter=',',
                                 quotechar='"', quoting=csv.QUOTE_MINIMAL)
         for row in tgt_reader:
@@ -92,7 +109,7 @@ def read_targets():
 
 def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, src_pa):
     cube = SpectralCube.read(fname)
-    cube.beam_threshold = 0.1
+    cube.beam_threshold = 0.13
     m0 = cube.moment0().to(u.Jy*u.km/(u.beam*u.s))
     m0.write('moment-0.fits', overwrite=True)
 
@@ -180,7 +197,7 @@ def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, comp_na
 
 
 
-def extract_all_spectra(targets, file_list, folder, selavy_table, max_spectra = 5000):
+def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, max_spectra = 5000):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 'max_s_max_n', 'min_opacity'),
             dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
                 meta={'name': 'ASKAP SMC Spectra'})
@@ -189,7 +206,7 @@ def extract_all_spectra(targets, file_list, folder, selavy_table, max_spectra = 
 
     i = 0
     for tgt in targets:
-        src = get_source(file_list, tgt, folder, selavy_table)
+        src = get_source(file_list, tgt, cutouts_folder, selavy_table)
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
             continue
@@ -200,7 +217,7 @@ def extract_all_spectra(targets, file_list, folder, selavy_table, max_spectra = 
             
         print('\nExtracting spectrum for src #{} {}'.format(tgt['id'], tgt['comp_name']))
 
-        plot_mom0(src['fname'], tgt['comp_name'], 'sb8906/figures', src['ra'], src['dec'], 
+        plot_mom0(src['fname'], tgt['comp_name'], figures_folder, src['ra'], src['dec'], 
                 src['a'], src['b'], src['pa'])
         
         continuum_start_vel = -100*u.km.to(u.m)
@@ -213,35 +230,55 @@ def extract_all_spectra(targets, file_list, folder, selavy_table, max_spectra = 
         min_opacity = np.min(opacity)
         rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(opacity, sd_cont)
 
-        output_spectrum('sb8906/spectra', spectrum, opacity, sigma_opacity, src['comp_name'], continuum_start_vel, continuum_end_vel)
+        output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, src['comp_name'], continuum_start_vel, continuum_end_vel)
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
                         rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, min_opacity])
 
     return src_table
+
+
+def prep_folders(folders):
+    for folder in folders:
+        if not os.path.exists(folder):
+            os.mkdir(folder)
+            print ("Created " + folder)
                
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
 
-    folder = 'sb8906/cutouts/'
-    file_list = glob.glob(folder + 'J*_sl.fits')
-    file_list.sort()
+    args = parseargs()
 
     start = time.time()
-    print("#### Started ASKAP spectra extraction at %s ####" %
-          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))
+    print("#### Started ASKAP spectra extraction for sbid {} at {} ####".format(args.sbid,
+          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start))))
 
-    targets = read_targets()
+    parent_folder = 'sb{}/'.format(args.sbid)
+    if args.parent:
+        parent_folder = args.parent
+    if not os.path.exists(parent_folder):
+        print("Error: Folder {} does not exist.".format(parent_folder))
+        return 1
+    cutout_folder = parent_folder + 'cutouts/'
+    figures_folder = parent_folder + 'figures/'
+    spectra_folder = parent_folder + 'spectra/'
+    prep_folders([spectra_folder, figures_folder])
+
+    file_list = glob.glob(cutout_folder + 'J*_sl.fits')
+    file_list.sort()
+
+    targets = read_targets('targets_{}.csv'.format(args.sbid))
     
     # Read and filter catalogue
-    src_votable = votable.parse('AS037_Continuum_Component_Catalogue_8906_100.votable', pedantic=False)
+    #src_votable = votable.parse('AS037_Continuum_Component_Catalogue_8906_100.votable', pedantic=False)
+    src_votable = votable.parse(args.catalogue, pedantic=False)
     selavy_table = src_votable.get_first_table().to_table()
     
-    spectra_table = extract_all_spectra(targets, file_list, folder, selavy_table)
+    spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder,spectra_folder)
 
     spectra_vo_table = from_table(spectra_table)
-    writeto(spectra_vo_table, 'askap_spectra.vot')
+    writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
 
     # Report
     end = time.time()
