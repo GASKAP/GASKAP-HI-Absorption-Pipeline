@@ -236,16 +236,28 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
             i, total_concurrency/i))
 
 
+def prep_folders(status_folder, log_folder):
+    for folder in [status_folder, log_folder]:
+        if not os.path.exists(folder):
+            os.mkdir(folder)
+            print ("Created " + folder)
+
 def main():
     # Parse command line options
     args = parseargs()
 
     start = time.time()
-    print("#### Started ASKAP cutout production at %s ####" %
-          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))
+    print("#### Started ASKAP cutout production of sbid {} at {} ####".format
+          (args.sbid, time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start))))
 
     print ('Checking every {} seconds for completed jobs, with a maximum of {} checks.'.format(args.delay, args.max_loops))
     
+    print (' Status folder', args.status_folder)
+    print (' Log folder', args.log_folder)
+    print (' Source filename', args.filename)
+    print (' Concurrency max {} min {}'.format(args.concurrency_limit, args.min_concurrency_limit))
+    print (' Batch system', ('PBS' if args.pbs else 'None'))
+
     # Prepare the run
     targets, image_params = read_image_params(args.filename)
     src_beam_map = build_map(image_params)
@@ -255,6 +267,7 @@ def main():
     
     status_folder = '{}/{}'.format(args.status_folder, args.sbid)
     log_folder = '{}/{}'.format(args.log_folder, args.sbid)
+    prep_folders(status_folder, log_folder)
 
     # Run through the processing
     produce_all_cutouts(targets, args.sbid, status_folder, src_beam_map, args.delay, args.concurrency_limit, 
@@ -263,10 +276,10 @@ def main():
 
     # Report
     end = time.time()
-    print('#### Processing completed at %s ####' %
-          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)))
-    print('Processed %d components in %.02f s' %
-          (len(targets), end - start))
+    print('#### Processing completed at {} ####'.format(
+          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end))))
+    print('Processed {0} targets in {1:.2f} s'.format(
+          len(targets), end - start))
     return 0
 
 
