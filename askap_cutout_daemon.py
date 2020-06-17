@@ -187,7 +187,7 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
             if use_pbs:
                 run_os_cmd(
-                    ('qsub -v COMP_INDEX={0} -v SBID={2} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
+                    ('qsub -v COMP_INDEX={0},SBID={2} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
                      '-e {1}/askap_abs_{0}_e.log ./start_job.sh').format(array_id, log_folder, sbid))
             else:
                 run_os_cmd('./start_job.sh {} {}'.format(array_id, sbid))

@@ -12,8 +12,8 @@ import csv
 import os
 import shutil
 
-def cleanup_prev(comp_name):
-    image_name='sb8906/{}_sl'.format(comp_name)
+def cleanup_prev(sbid,comp_name):
+    image_name='sb{}/{}_sl'.format(sbid, comp_name)
     for suffix in ['image', 'model', 'pb', 'psf', 'residual', 'sumwt']:
         filename = '{}.{}'.format(image_name, suffix)
         if os.path.exists(filename):
@@ -62,6 +62,7 @@ def get_ms_pattern(sbid):
 def main():
     sample_id = int(os.environ['SAMPLE_ID'])
     sbid = int(os.environ['SBID'])
+    print ("Processing sbid {} sample {} ".format(sbid, sample_id))
 
     comp_name, ra, dec, beams = get_target_params(sbid, sample_id)
     print ("Starting extract of subcube for sbid {} sample {} comp {}".format(sbid, sample_id, comp_name))
@@ -74,11 +75,11 @@ def main():
         vis_name = pattern.format(interleave, num)
         vis.append(vis_name)
 
-    cleanup_prev(comp_name)
+    cleanup_prev(sbid,comp_name)
 
     print ('Processing input visibilities of ' + str(vis))
     klambda = '1.6'
-    image_name='sb{}}/{}_sl'.format(sbid, comp_name)
+    image_name='sb{}/{}_sl'.format(sbid, comp_name)
     uvdist='>{}Klambda'.format(klambda)
     fits_name=image_name + '.fits'
     phasecenter='J2000 {}deg {}deg'.format(ra, dec)
@@ -88,15 +89,16 @@ def main():
       vptable='../ASKAP_AIRY_BP.tab')
     if not os.path.exists(image_name+'.image'):
         print ('ERROR: tclean did not produce an image')
-        return 1
+        raise Exception('tclean failed')
 
     exportfits(imagename=image_name+'.image', fitsimage=fits_name,velocity=True)
     if not os.path.exists(fits_name):
         print ('ERROR: exportfits did not produce a fits file')
-        return 1
+        raise Exception('exportfits failed')
 
-    return 0
+    return
 
 
 if __name__ == '__main__':
-    exit(main())
+    main()
+    exit()

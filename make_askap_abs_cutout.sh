@@ -11,7 +11,7 @@ status_folder="$3"
 export SAMPLE_ID
 export SBID
 
-casa --nologger --log2term -c sub_cube_abs_retry.py
+casa --nologger --log2term -c sub_cube_abs.py
 
 # Mark the job as complete
 retval=$?

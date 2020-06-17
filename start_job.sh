@@ -24,4 +24,4 @@ if [ -z "${SBID}" ]; then SBID=${2}; fi
 if [ -n "$PBS_NODEFILE" ]; then cat $PBS_NODEFILE; fi
 
 ##### Execute Program #####
-bash ./make_askap_abs_cutout.sh ${COMP_INDEX} ${SBID} 'status/${SBID}'
+bash ./make_askap_abs_cutout.sh ${COMP_INDEX} ${SBID} "status/${SBID}"
