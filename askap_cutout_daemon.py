@@ -33,8 +33,8 @@ def parseargs():
                                      description="Daemon process to manage the production of cutouts for each component from an ASKAP scheduing block")
     parser.add_argument("-d", "--delay", help="Number of seconds to pause between scans for completed jobs",
                         type=int, default=30)
-    parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling bloc to be processed",
-                        type=int, default=8906)
+    parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
+                        type=int, required=True)
     parser.add_argument("-t", "--status_folder", help="The status folder which will contain the completed files",
                         default='status')
     parser.add_argument("-f", "--filename", help="The name of the votable format file listing the components to be processed.",
@@ -43,7 +43,7 @@ def parseargs():
                         type=int, default=500)
     parser.add_argument("-c", "--concurrency_limit", help="The maximum number of concurrent processes allowed to run.",
                         type=int, default=12)
-    parser.add_argument("-d", "--min_concurrency_limit", help="The minumum number of concurrent processes we prefer to run. " +
+    parser.add_argument("-n", "--min_concurrency_limit", help="The minumum number of concurrent processes we prefer to run. " +
                         "Duplicate ms usage will be allowed in orer to reach this number of jobs",
                         type=int, default=6)
 
@@ -173,8 +173,13 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
 
 
         tgt_ms = src_beam_map[comp_name]
-        if len(active_ids) > min_concurrency_limit and tgt_ms & active_ms:
-            continue
+        if len(active_ids) > min_concurrency_limit:
+            clash = False
+            for ms in tgt_ms:
+                if ms in active_ms:
+                    clash = True
+            if clash:
+                continue
 
         if len(active_ids) < concurrency_limit:
             rate_limited = False
