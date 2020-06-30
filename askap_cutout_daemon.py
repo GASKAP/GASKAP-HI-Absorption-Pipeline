@@ -35,7 +35,7 @@ def parseargs():
                         type=int, default=30)
     parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
                         type=int, required=True)
-    parser.add_argument("-t", "--status_folder", help="The status folder which will contain the completed files",
+    parser.add_argument("--status_folder", help="The status folder which will contain the job completion or failed files",
                         default='status')
     parser.add_argument("-f", "--filename", help="The name of the votable format file listing the components to be processed.",
                         default='smc_srcs_image_params.vot')
@@ -52,6 +52,8 @@ def parseargs():
     parser.add_argument("-l", "--log_folder", help="The folder which will contain the stdout and stderr files from the jobs",
                         default='logs')
     parser.add_argument("-a", "--active", help="The numerical component index of an active cutout job. The job will be monitored as if this daemon started it",
+                        type=int, action='append')
+    parser.add_argument("-t", "--target", help="The numerical component index of a target to be processed. If any targets are specified then only those targets are run. Default is for all targets to be run.",
                         type=int, action='append')
     args = parser.parse_args()
     return args
@@ -203,8 +205,11 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
 
 
 def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concurrency_limit, min_concurrency_limit, use_pbs,
-                        log_folder, pre_active_jobs, max_loops=500):
+                        log_folder, pre_active_jobs, target_list, max_loops=500):
     remaining_array_ids = list(range(1, len(targets)+1))
+    if target_list:
+        remaining_array_ids = list(target_list)
+    num_targets = len(remaining_array_ids)
     active_ms = list()
     active_ids = set()
     completed_srcs = set()
@@ -234,7 +239,8 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
     else:
         print('\nCompleted processing in {} loops with average concurrency {:.2f}'.format(
             i, total_concurrency/i))
-
+    return num_targets
+    
 
 def prep_folders(status_folder, log_folder):
     for folder in [status_folder, log_folder]:
@@ -263,23 +269,25 @@ def main():
     src_beam_map = build_map(image_params)
 
     if args.active:
-        print ("Already active jobs: {}".format(args.active))
+        print ("\nAlready active jobs: {}".format(args.active))
+    if args.target:
+        print ("\nLimiting run to only these targets/jobs: {}".format(args.target))
     
     status_folder = '{}/{}'.format(args.status_folder, args.sbid)
     log_folder = '{}/{}'.format(args.log_folder, args.sbid)
     prep_folders(status_folder, log_folder)
 
     # Run through the processing
-    produce_all_cutouts(targets, args.sbid, status_folder, src_beam_map, args.delay, args.concurrency_limit, 
-                        args.min_concurrency_limit, args.pbs, 
-                        log_folder, args.active, max_loops=args.max_loops)
+    num_targets = produce_all_cutouts(targets, args.sbid, status_folder, src_beam_map, args.delay, 
+                        args.concurrency_limit, args.min_concurrency_limit, args.pbs, 
+                        log_folder, args.active, args.target, max_loops=args.max_loops)
 
     # Report
     end = time.time()
     print('#### Processing completed at {} ####'.format(
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end))))
-    print('Processed {0} targets in {1:.2f} s'.format(
-          len(targets), end - start))
+    print('Processed {0} targets in {1:.2f} min'.format(
+          len(num_targets), (end - start)/60))
     return 0
 
 
