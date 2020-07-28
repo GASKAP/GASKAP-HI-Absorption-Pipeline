@@ -6,6 +6,7 @@ import time
 
 from astropy.io import votable
 import numpy as np
+import astropy.units as u
 
 
 def parseargs():
@@ -54,6 +55,15 @@ def output_img(f, comp_name, rating):
     f.write('\n</a>\n</div>')
     return
 
+    
+def output_non_zoom_img(f, comp_name, rating):
+    f.write('\n<div class="col-lg-3 col-md-4 col-6 px-2">')
+    f.write('\n<a href="spectra/{0}_spec.png" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(comp_name, rating))
+    f.write('\n<img class="img-fluid img-thumbnail" ')
+    f.write('src="spectra/{0}_spec.png" alt="Preview of spectrum at {0}">'.format(comp_name))
+    f.write('\n</a>\n</div>')
+    return
+
 def output_footer(f):
     f.write('\n\n</div>\n</div>\n</body>\n</html>')
     return
@@ -89,6 +99,45 @@ def output_spectra(sbid, table, title, filename, threshold=None):
 
             for name in comp_names:
                 output_img(f, name, rating)
+                    
+        output_footer(f)
+
+def find_mw_vel_comp_names(comp_names, parent_folder, threshold, max_velocity):
+    mw_comp_names = []
+    for name in comp_names:
+        filename = '{0}/spectra/{1}_spec.vot'.format(parent_folder, name)
+        spectrum_votable = votable.parse(filename, pedantic=False)
+        spectrum_tab = spectrum_votable.get_first_table().to_table()
+        non_smc_vel_range = spectrum_tab['velocity'] < max_velocity
+        non_smc_spectrum = spectrum_tab[non_smc_vel_range]
+        non_smc_min_idx = np.argmin(non_smc_spectrum['opacity'])
+        signal = (1-non_smc_spectrum['opacity'][non_smc_min_idx])
+        sigma = signal/non_smc_spectrum['sigma_opacity'][non_smc_min_idx]
+        velocity = non_smc_spectrum['velocity'][non_smc_min_idx]*(u.m/u.s).to(u.km/u.s)
+        if sigma > threshold:
+            mw_comp_names.append(name)
+    return mw_comp_names
+
+
+
+
+def output_mw_spectra(sbid, table, parent_folder, title, filename, threshold=None, max_velocity=70*u.km/u.s):
+    print (title, filename)
+    with open(filename, 'w') as f:
+        output_header(f, title)
+
+        for rating in 'ABCDEF':
+            targets = table[table['rating']==rating]
+            if threshold:
+                targets = targets[(1-targets['min_opacity'])/targets['sd_cont'] > threshold]
+            comp_names = sorted(targets['comp_name'])
+            mw_comp_names = find_mw_vel_comp_names(comp_names, parent_folder, threshold, max_velocity)
+            print('Rating {} has {} spectra'.format(rating, len(mw_comp_names)))
+
+            output_block_title(f, rating, rating=='A', len(mw_comp_names))
+
+            for name in mw_comp_names:
+                output_non_zoom_img(f, name, rating)
                     
         output_footer(f)
 
@@ -149,6 +198,9 @@ def main():
         args.sbid, args.good), '{}/detections.html'.format(parent_folder), threshold=args.good)
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
         args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best)
+
+    output_mw_spectra(args.sbid, spectra_table, parent_folder, 'Absorption spectra for SBID {} with {}σ candidate Milky Way detections'.format(
+        args.sbid, args.good), '{}/mw_detections.html'.format(parent_folder), threshold=args.good)
 
     if args.sbid == 8906:
         output_j19_comparison(args.sbid, spectra_table, 'Absorption spectra for SBID {} also in Jameson 19'.format(
