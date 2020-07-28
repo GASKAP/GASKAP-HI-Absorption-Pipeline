@@ -12,16 +12,18 @@ import time
 import warnings
 
 import astropy.units as u
-from astropy.table import Table, Column
-from astropy.io import ascii
+from astropy.coordinates import SkyCoord, FK4
+from astropy.io import fits, votable
 from astropy.io.ascii import Csv
 from astropy.io.votable.tree import Param,Info
 from astropy.io.votable import from_table, writeto
-from astropy.io import fits, votable
-from astropy.wcs import WCS
-from astropy.table import QTable
+from astropy.table import QTable, Table, Column
 from astropy.utils.exceptions import AstropyWarning
+from astropy.visualization import simple_norm
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import numpy as np
 import numpy.core.records as rec
 
@@ -49,27 +51,6 @@ def parseargs():
                         required=False)
     args = parser.parse_args()
     return args
-
-
-def output_spectra(velocity, opacity, flux, filename, 
-                   sigma_tau):
-    """
-    Write the spectrum (velocity, flux and opacity) to a votable format file.
-
-    :param spectrum: The spectrum to be output.
-    :param opacity:  The opacity to be output.
-    :param filename:  The filename to be created
-    :param longitude: The galactic longitude of the target object
-    :param latitude: The galactic latitude of the target object
-    """
-    table = Table(meta={'name': filename, 'id': 'opacity'})
-    table.add_column(Column(name='velocity', data=velocity, unit='m/s'))
-    table.add_column(Column(name='opacity', data=opacity))
-    table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
-    table.add_column(Column(name='sigma_opacity', data=sigma_tau, description='Noise in the absorption profile'))
-
-    votable = from_table(table)
-    writeto(votable, filename)
 
 
 def read_targets(targets_file):
@@ -154,10 +135,10 @@ def save_spectrum(velocity, opacity, flux, filename,
     :param latitude: The galactic latitude of the target object
     """
     table = Table(meta={'name': filename, 'id': 'opacity'})
-    table.add_column(Column(name='velocity', data=velocity, unit='m/s'))
-    table.add_column(Column(name='opacity', data=opacity))
+    table.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
+    table.add_column(Column(name='opacity', data=opacity, description='Absorption as exp(-tau)'))
     table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
-    table.add_column(Column(name='sigma_opacity', data=sigma_tau, description='Noise in the absorption profile'))
+    table.add_column(Column(name='sigma_opacity', data=sigma_tau, description='Noise in the absorption profile, relative to exp(-tau)'))
 
     votable = from_table(table)
     writeto(votable, filename)
@@ -243,7 +224,175 @@ def prep_folders(folders):
         if not os.path.exists(folder):
             os.mkdir(folder)
             print ("Created " + folder)
-               
+
+
+def recenter(ax, wcs, x, y, radius=None, width=None, height=None):
+    '''
+    Center the image on a given position and with a given radius.
+
+    Either the radius or width/heigh arguments should be specified.
+
+    Parameters
+    ----------
+
+    x, y : float
+        Coordinates to center on
+
+    radius : float, optional
+        Radius of the region to view. This produces a square plot.
+
+    width : float, optional
+        Width of the region to view. This should be given in
+        conjunction with the height argument.
+
+    height : float, optional
+        Height of the region to view. This should be given in
+        conjunction with the width argument.
+    '''
+
+    xpix, ypix = wcs.wcs_world2pix(x, y, 0)
+    
+    pix_scale = proj_plane_pixel_scales(wcs)
+    sx, sy = pix_scale[1], pix_scale[0]
+
+    if radius:
+        dx_pix = radius / sx
+        dy_pix = radius / sy
+    elif width and height:
+        dx_pix = width / sx * 0.5
+        dy_pix = height / sy * 0.5
+    else:
+        raise Exception("Need to specify either radius= or width= and height= arguments")
+
+    if (xpix + dx_pix < -0.5 or
+        xpix - dx_pix > wcs.array_shape[1] - 0.5 or
+        ypix + dy_pix < -0.5 or
+            ypix - dy_pix > wcs.array_shape[1]):
+
+        raise Exception("Zoom region falls outside the image")
+
+    ax.set_xlim(xpix - dx_pix, xpix + dx_pix)
+    ax.set_ylim(ypix - dy_pix, ypix + dy_pix)
+
+
+def add_source_box(ax, sources):
+    min_ra = np.min(sources['ra'])
+    max_ra = np.max(sources['ra'])
+    min_dec = np.min(sources['dec'])
+    max_dec = np.max(sources['dec'])
+    print (min_ra, max_ra, min_dec, max_dec)
+    width = max_ra-min_ra
+    height = max_dec-min_dec
+    centre_ra = min_ra + width/2
+    centre_dec = min_dec + height/2
+    print (centre_ra, centre_dec, width, height)
+
+    r = Rectangle((min_ra, min_dec), width, height, edgecolor='green', facecolor='none',
+              transform=ax.get_transform('fk5'))
+    ax.add_patch(r)
+
+
+def get_field_centre(sources):
+    min_ra = np.min(sources['ra'])
+    max_ra = np.max(sources['ra'])
+    min_dec = np.min(sources['dec'])
+    max_dec = np.max(sources['dec'])
+    print (min_ra, max_ra, min_dec, max_dec)
+    width = max_ra-min_ra
+    height = max_dec-min_dec
+    centre_ra = min_ra + width/2
+    centre_dec = min_dec + height/2
+    field_centre = SkyCoord(ra=centre_ra*u.deg, dec=centre_dec*u.deg, frame=FK4)
+    print (field_centre)
+    return field_centre
+
+
+def add_sources(ax, sources,detection, best):
+
+    for src in sources:
+        colour_name = 'darkgray'
+        facecolor = 'darkgray'
+        sigma = (1-src['min_opacity'])/src['sd_cont']
+        marker = '.'
+        if sigma > best:
+            marker = 'o'
+            facecolor = 'none'
+            colour_name = 'red'
+
+        elif sigma > detection:
+            marker = '^'
+            facecolor = 'none'
+            colour_name = 'blue'
+            
+        elif 'rating' not in src or src['rating'] <= 'B':
+            marker = '+'
+            facecolor = 'darkgreen'
+
+        ax.scatter([src['ra']], [src['dec']], transform=ax.get_transform('world'), 
+               marker=marker, edgecolor=colour_name, facecolor=facecolor)#,
+               #s=300, edgecolor=colour_name, facecolor='none', lw=2)
+
+
+def plot_background_map(fig, background):
+
+    # moment zero map
+    mom0 = fits.open(background)
+
+    no_nan_data = np.nan_to_num(mom0[0].data)
+    nh_data = no_nan_data * 1.82 * 10**18 /1e3
+    vmin=np.percentile(nh_data, 0.25)
+    vmax=np.percentile(nh_data, 99.75)
+
+    # Create an ImageNormalize object
+    vmid = vmin - (vmax - vmin) / 30.
+    asinh_a = (vmid - vmin) / (vmax - vmin)
+    norm_kwargs = {'asinh_a': abs(asinh_a)}
+    norm = simple_norm(nh_data, 'asinh', min_cut=vmin, max_cut=vmax, clip=False,
+                                    **norm_kwargs)
+
+    wcs = WCS(mom0[0].header)
+    ax = fig.add_subplot(111, projection=wcs)
+    im = ax.imshow(nh_data, cmap='gist_yarg', vmin=vmin, vmax=vmax, alpha=0.6, norm=norm)
+    ax.grid()
+    return ax, wcs
+
+
+def plot_source_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0.fits'):
+
+    print('\nPlotting {} source locations over background of {}.'.format(len(spectra_table), background))
+
+    fig = plt.figure(figsize=(10.5, 9))
+    ax, wcs = plot_background_map(fig, background)
+
+    field_centre = get_field_centre(spectra_table)
+    recenter(ax, wcs, field_centre.ra.value, field_centre.dec.value, width=8.25, height=7.25)  # degrees
+
+    # Display the moment map image
+    #plt.colorbar(im,fraction=0.046, pad=0.04)
+    add_sources(ax, spectra_table, 3, 5)
+
+    prefix = figures_folder + "/source_loc"
+    print ("  Output", prefix+".png")
+    fig.savefig(prefix + ".png", bbox_inches='tight')
+    fig.savefig(prefix + ".pdf", bbox_inches='tight')
+
+
+def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0.fits'):
+
+    print('\nPlotting field locations over background of {}.'.format(background))
+
+    fig = plt.figure(figsize=(10.5, 9))
+    ax, wcs = plot_background_map(fig, background)
+
+    # Display the moment map image
+    #plt.colorbar(im,fraction=0.046, pad=0.04)
+    add_source_box(ax, spectra_table)
+
+    prefix = figures_folder + "/field_loc"
+    print ("  Output", prefix+".png")
+    fig.savefig(prefix + ".png", bbox_inches='tight')
+    fig.savefig(prefix + ".pdf", bbox_inches='tight')
+ 
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
@@ -279,6 +428,9 @@ def main():
 
     spectra_vo_table = from_table(spectra_table)
     writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
+
+    plot_source_loc_map(spectra_table, figures_folder)
+    plot_field_loc_map(spectra_table, figures_folder)
 
     # Report
     end = time.time()
