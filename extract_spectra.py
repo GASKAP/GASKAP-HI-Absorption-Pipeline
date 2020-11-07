@@ -89,6 +89,12 @@ def read_targets(targets_file):
     return table
 
 
+def rename_columns(table):
+    names = np.asarray(table.colnames)
+    for name in names:
+        if name.startswith('col_'):
+            table.rename_column(name, name[4:])
+
 def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, src_pa):
     cube = SpectralCube.read(fname)
     cube.beam_threshold = 0.13
@@ -429,6 +435,7 @@ def main():
     #src_votable = votable.parse('AS037_Continuum_Component_Catalogue_8906_100.votable', pedantic=False)
     src_votable = votable.parse(args.catalogue, pedantic=False)
     selavy_table = src_votable.get_first_table().to_table()
+    rename_columns(selavy_table)
     
     spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder,spectra_folder)
 
