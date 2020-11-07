@@ -7,6 +7,7 @@
 import argparse
 import csv 
 import glob
+import math
 import os
 import time
 import warnings
@@ -102,12 +103,12 @@ def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, s
     fig.set_theme('publication')
 
     # Plot ellipse for each source
-    a_deg = src_maj*u.arcsec.to(u.deg)
-    b_deg = src_min*u.arcsec.to(u.deg)
-    fig.show_ellipses(src_ra, src_dec, a_deg, b_deg, angle=src_pa, edgecolor='red') #, 
+    a_deg = src_maj*u.arcsec.to(u.deg)*2
+    b_deg = src_min*u.arcsec.to(u.deg)*2
+    fig.show_ellipses(src_ra, src_dec, a_deg, b_deg, angle=src_pa-90, edgecolor='red') #, 
 
-    figname = '{}/{}_mom0.'.format(out_folder, comp_name)
-    fig.savefig(figname+'.pdf')
+    figname = '{}/{}_mom0'.format(out_folder, comp_name)
+    #fig.savefig(figname+'.pdf')
     fig.savefig(figname+'.png')
     fig.close()
 
@@ -119,7 +120,7 @@ def get_source(file_list, target, folder, selavy_table):
     
     comp_cat_row= selavy_table[selavy_table['component_name']==target['comp_name']][0]
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
-           'a':comp_cat_row['maj_axis'], 'b':comp_cat_row['min_axis'], 'pa': comp_cat_row['pos_ang'],
+           'a':comp_cat_row['maj_axis']/2, 'b':comp_cat_row['min_axis']/2, 'pa': comp_cat_row['pos_ang'],
           'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak']}
     return src
     
@@ -144,7 +145,7 @@ def save_spectrum(velocity, opacity, flux, filename,
     writeto(votable, filename)
 
 
-def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, num_edge_chan=10):
+def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, num_edge_chan=10):
 
     hdulist = fits.open(fname)
     image = hdulist[0].data
@@ -152,8 +153,10 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, num_edg
     w = WCS(header)
     index = np.arange(header['NAXIS3'])
     velocities = w.wcs_pix2world(10,10,index[:],0,0)[2]
+    radius=math.ceil(max(6, src['a']))
 
-    img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, radius=6)
+    img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
+        radius=radius, plot_weight_path=figures_folder)
 
     l_edge, r_edge = cube_tools.find_edges(img_slice, num_edge_chan)
 
@@ -179,11 +182,13 @@ def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, comp_na
 
 
 def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, max_spectra = 5000):
-    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 'max_s_max_n', 'min_opacity'),
-            dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
-                meta={'name': 'ASKAP SMC Spectra'})
+    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
+            'max_s_max_n', 'min_opacity', 'semi_maj_axis', 'semi_min_axis', 'pa'),
+            dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            'float64', 'float64', 'float64'),
+            meta={'name': 'ASKAP SMC Spectra'})
 
-    print('Processing {} cutouts into spectra'.format(len(targets)))
+    print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
     for tgt in targets:
@@ -196,14 +201,14 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
             print ("Reaching maximum spectra for this run")
             break
             
-        print('\nExtracting spectrum for src #{} {}'.format(tgt['id'], tgt['comp_name']))
+        print('\nExtracting spectrum for src #{} {} maj:{} min:{} pa:{:.3f}'.format(tgt['id'], tgt['comp_name'], src['a'], src['b'], src['pa']))
 
         plot_mom0(src['fname'], tgt['comp_name'], figures_folder, src['ra'], src['dec'], 
                 src['a'], src['b'], src['pa'])
         
         continuum_start_vel = -100*u.km.to(u.m)
         continuum_end_vel = -60*u.km.to(u.m)
-        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel)
+        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder)
         
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
@@ -214,7 +219,8 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
         output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, src['comp_name'], continuum_start_vel, continuum_end_vel)
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
-                        rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, min_opacity])
+                        rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, min_opacity, 
+                        src['a'], src['b'], src['pa']])
 
     return src_table
 
@@ -405,7 +411,7 @@ def main():
 
     parent_folder = 'sb{}/'.format(args.sbid)
     if args.parent:
-        parent_folder = args.parent
+        parent_folder = args.parent + '/'
     if not os.path.exists(parent_folder):
         print("Error: Folder {} does not exist.".format(parent_folder))
         return 1
