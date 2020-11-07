@@ -1,11 +1,12 @@
 #!/usr/bin/env python -u
 
-# Daemon process to manage the production of cutouts from an ASKAP scheduing block
+# Daemon process to manage the production of cutouts from an ASKAP scheduling block
 
 # Author James Dempsey
 # Date 27 Jan 2020
 
 import argparse
+import csv
 import datetime
 
 import os
@@ -37,14 +38,14 @@ def parseargs():
                         type=int, required=True)
     parser.add_argument("--status_folder", help="The status folder which will contain the job completion or failed files",
                         default='status')
-    parser.add_argument("-f", "--filename", help="The name of the votable format file listing the components to be processed.",
+    parser.add_argument("-f", "--filename", help="The name of the csv format file listing the components to be processed and their beams.",
                         default='smc_srcs_image_params.vot')
     parser.add_argument("-m", "--max_loops", help="The maximum number of processing loops the daemon will run.",
                         type=int, default=500)
     parser.add_argument("-c", "--concurrency_limit", help="The maximum number of concurrent processes allowed to run.",
                         type=int, default=12)
     parser.add_argument("-n", "--min_concurrency_limit", help="The minumum number of concurrent processes we prefer to run. " +
-                        "Duplicate ms usage will be allowed in orer to reach this number of jobs",
+                        "Duplicate ms usage will be allowed in order to reach this number of jobs",
                         type=int, default=6)
 
     parser.add_argument("--pbs", help="Run the jobs via PBS qsub command", default=False,
@@ -55,6 +56,8 @@ def parseargs():
                         type=int, action='append')
     parser.add_argument("-t", "--target", help="The numerical component index of a target to be processed. If any targets are specified then only those targets are run. Default is for all targets to be run.",
                         type=int, action='append')
+    parser.add_argument("--target_file", help="A file listing the names of targets to be processed. If any targets are specified then only those targets are run.",
+                        type=str)
     args = parser.parse_args()
     return args
 
@@ -81,6 +84,37 @@ def run_os_cmd(cmd, failOnErr=True):
         if failOnErr:
             raise CommandFailedError(message)
     return None
+
+
+def get_source_list(filename):
+    """
+    Read the sources and the beams they can be found in from the targets csv file.
+
+    Parameters
+    ----------
+    filename: str
+        Name of the csv file listing all sources and the beams they can be found in.
+    
+    Returns
+    -------
+    List of the sources in the same order as the csv file and a map of source names to beam lists.
+    """
+    src_beam_map = dict()
+    targets = []
+    with open(filename, 'r') as csvfile:
+        tgt_reader = csv.reader(csvfile, delimiter=',',
+                                quotechar='"', quoting=csv.QUOTE_MINIMAL)
+        for row in tgt_reader:
+            if (tgt_reader.line_num == 1):
+                # skip header
+                continue
+            comp_name = row[1]
+            #ra = float(row[2])
+            #dec = float(row[3])
+            beams = row[4:]
+            targets.append(comp_name)
+            src_beam_map[comp_name] = beams
+    return targets, src_beam_map
 
 
 def read_image_params(filename):
@@ -218,16 +252,18 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
     total_concurrency = 0
     print('Processing {} targets'.format(len(remaining_array_ids)))
 
-    total_concurrency += register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs)
+    num_running = register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs)
+    total_concurrency += num_running
     i = 0
     while len(remaining_array_ids) > 0 and i < max_loops:
         i += 1
-        print("\nLoop #{}, completed {} failed {} remaining {} at {}".format(
-            i, len(completed_srcs), len(failed_srcs), len(remaining_array_ids), 
+        print("\nLoop #{}, completed {} failed {} running {} remaining {} at {}".format(
+            i, len(completed_srcs), len(failed_srcs), num_running, len(remaining_array_ids)-num_running, 
             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))), flush=True)
-        total_concurrency += job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids,
+        num_running = job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, remaining_array_ids,
                                       completed_srcs, failed_srcs, concurrency_limit, min_concurrency_limit, use_pbs, 
                                       log_folder)
+        total_concurrency += num_running
         if len(remaining_array_ids) > 0:
             time.sleep(delay)
 
@@ -245,8 +281,54 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
 def prep_folders(status_folder, log_folder):
     for folder in [status_folder, log_folder]:
         if not os.path.exists(folder):
-            os.mkdir(folder)
+            os.makedirs(folder)
             print ("Created " + folder)
+
+
+def build_target_list(targets, target_ids, target_file):
+    """
+    Build a list of the targets to be processed.
+
+    Parameters
+    ----------
+    targets: str[]
+        List of the component names of possible targets.
+    target_ids: int[]
+        List of the numerical ids of the subset of targets to be processed.
+    target_file: str
+        Name of the file listing the comonent names of the subset of targets to be processed.
+    
+    Returns
+    -------
+    List of the numerical ids of the subset of targets to be processed.
+    """
+    if target_ids:
+        return target_ids
+    if not target_file:
+        return None
+
+    target_list = []
+    with open(target_file, 'r') as tgt_file:
+        for line in tgt_file:
+            comp_name = line.strip()
+            if len(comp_name) == 0 or comp_name.startswith('#'):
+                continue
+            found = False
+            for idx, tgt in enumerate(targets):
+                if tgt == comp_name:
+                    target_list.append(idx+1)
+                    found = True
+                    continue
+            if not found:
+                print ("Source {} is not known. Ignoring.".format(comp_name))
+    
+    # Make sure we don't run everything if a list was supplied but nothing is found
+    if len(target_list) == 0:
+        msg = 'ERROR: None of the targets listed in {} were found.'.format(target_file)
+        print (msg)
+        raise Exception(msg)
+    
+    return target_list
 
 def main():
     # Parse command line options
@@ -265,13 +347,15 @@ def main():
     print (' Batch system', ('PBS' if args.pbs else 'None'))
 
     # Prepare the run
-    targets, image_params = read_image_params(args.filename)
-    src_beam_map = build_map(image_params)
+    #targets, image_params = read_image_params(args.filename)
+    #src_beam_map = build_map(image_params)
+    targets, src_beam_map = get_source_list(args.filename)
+    target_list = build_target_list(targets, args.target, args.target_file)
 
     if args.active:
         print ("\nAlready active jobs: {}".format(args.active))
-    if args.target:
-        print ("\nLimiting run to only these targets/jobs: {}".format(args.target))
+    if target_list:
+        print ("\nLimiting run to only these targets/jobs: {}".format(target_list))
     
     status_folder = '{}/{}'.format(args.status_folder, args.sbid)
     log_folder = '{}/{}'.format(args.log_folder, args.sbid)
@@ -280,14 +364,14 @@ def main():
     # Run through the processing
     num_targets = produce_all_cutouts(targets, args.sbid, status_folder, src_beam_map, args.delay, 
                         args.concurrency_limit, args.min_concurrency_limit, args.pbs, 
-                        log_folder, args.active, args.target, max_loops=args.max_loops)
+                        log_folder, args.active, target_list, max_loops=args.max_loops)
 
     # Report
     end = time.time()
     print('#### Processing completed at {} ####'.format(
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end))))
     print('Processed {0} targets in {1:.2f} min'.format(
-          len(num_targets), (end - start)/60))
+          num_targets, (end - start)/60))
     return 0
 
 
