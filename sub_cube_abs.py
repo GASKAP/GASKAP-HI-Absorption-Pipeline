@@ -79,13 +79,14 @@ def main():
 
     print ('Processing input visibilities of ' + str(vis))
     klambda = '1.6'
+    #klambda = '2.0'
     image_name='sb{}/{}_sl'.format(sbid, comp_name)
     uvdist='>{}Klambda'.format(klambda)
     fits_name=image_name + '.fits'
     phasecenter='J2000 {}deg {}deg'.format(ra, dec)
     tclean (vis=vis,specmode='cube',imagename=image_name,reffreq='1.42040571183GHz',restfreq='1.42040571183GHz',
-      phasecenter=phasecenter,imsize=50,uvrange=uvdist,
-      gridder='standard', width='1km/s',
+      phasecenter=phasecenter,imsize=50,uvrange=uvdist,weighting='natural',
+      gridder='standard', pbcor=True, width='1km/s', niter=1000, cell='1arcsec',
       vptable='../ASKAP_AIRY_BP.tab')
     if not os.path.exists(image_name+'.image'):
         print ('ERROR: tclean did not produce an image')
