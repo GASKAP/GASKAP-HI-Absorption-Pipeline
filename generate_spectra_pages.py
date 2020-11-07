@@ -36,13 +36,26 @@ def output_header(f, title):
     f.write('\n<h1 align="middle">{}</h1>'.format(title))
     return
 
+def output_location_plots(f):
+    f.write('\n<div class="row px-3" id="maps">')
+    f.write('\n<div class="col-md-auto"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">Location</hs></div>')
+    f.write('\n<div class="col-md-auto">')
+    f.write('\n<a href="figures/field_loc.png" class="d-block mb-4 h-100"  data-lightbox="maps">')
+    f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/field_loc.png" alt="Map of the location of the field.">')
+    f.write('\n</a>\n</div>')
+    f.write('\n<div class="col-md-auto">')
+    f.write('\n<a href="figures/source_loc.png" class="d-block mb-4 h-100"  data-lightbox="maps">')
+    f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/source_loc.png" alt="Map of the location of the sources.">')
+    f.write('\n</a>\n</div>')
+    f.write('\n</div>')
+
 def output_block_title(f, rating, first, count):
     if not first:
         f.write('\n\n</div><br/>\n')
     spec = 'spectrum' if count == 1 else 'spectra'
     f.write('\n<div>')
     f.write('\n<div class="col-9 d-inline"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">{} Rating {} {}</h2></div>'.format(count, rating, spec))
-    f.write('\n<div class="col-3 pull-right d-inline"><a class="btn btn-primary" data-toggle="collapse" href="#spectra{0}" role="button" aria-expanded="false" aria-controls="spectra{0}" style="font-size: x-small;">Toggle</a></div>'.format(rating))
+    f.write('\n<div class="col-3 pull-right d-inline"><a class="btn btn-primary" data-toggle="collapse" href="#spectra{0}" role="button" aria-expanded="false" aria-controls="spectra{0}" style="font-size: x-small;">Hide/Show</a></div>'.format(rating))
     f.write('\n</div>')
     f.write('\n<div class="row text-center text-lg-left collapse show" id="spectra{}">'.format(rating))
 
@@ -83,10 +96,12 @@ def output_j19_img(f, comp_name, rating):
     return
 
 
-def output_spectra(sbid, table, title, filename, threshold=None):
+def output_spectra(sbid, table, title, filename, threshold=None, verbose=False):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
+
+        output_location_plots(f)
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
@@ -95,6 +110,9 @@ def output_spectra(sbid, table, title, filename, threshold=None):
             comp_names = sorted(targets['comp_name'])
             print('Rating {} has {} spectra'.format(rating, len(comp_names)))
 
+            if verbose:
+              print (comp_names)
+              
             output_block_title(f, rating, rating=='A', len(comp_names))
 
             for name in comp_names:
@@ -125,6 +143,8 @@ def output_mw_spectra(sbid, table, parent_folder, title, filename, threshold=Non
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
+
+        output_location_plots(f)
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
@@ -197,7 +217,7 @@ def main():
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
         args.sbid, args.good), '{}/detections.html'.format(parent_folder), threshold=args.good)
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
-        args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best)
+        args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best, verbose=True)
 
     output_mw_spectra(args.sbid, spectra_table, parent_folder, 'Absorption spectra for SBID {} with {}σ candidate Milky Way detections'.format(
         args.sbid, args.good), '{}/mw_detections.html'.format(parent_folder), threshold=args.good)
