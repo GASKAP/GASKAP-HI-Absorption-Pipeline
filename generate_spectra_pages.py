@@ -4,9 +4,12 @@ import argparse
 import os
 import time
 
-from astropy.io import votable
-import numpy as np
+from astropy.coordinates import SkyCoord
+from astropy.io import ascii, votable
+from astropy.io.votable import from_table, writeto
+from astropy.table import Column, Table
 import astropy.units as u
+import numpy as np
 
 
 def parseargs():
@@ -53,8 +56,9 @@ def output_block_title(f, rating, first, count):
     if not first:
         f.write('\n\n</div><br/>\n')
     spec = 'spectrum' if count == 1 else 'spectra'
+    title = '{} Rating {} {}'.format(count, rating, spec) if rating else '{} Missed {} (with closest source)'.format(count, spec)
     f.write('\n<div>')
-    f.write('\n<div class="col-9 d-inline"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">{} Rating {} {}</h2></div>'.format(count, rating, spec))
+    f.write('\n<div class="col-9 d-inline"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">{}</h2></div>'.format(title))
     f.write('\n<div class="col-3 pull-right d-inline"><a class="btn btn-primary" data-toggle="collapse" href="#spectra{0}" role="button" aria-expanded="false" aria-controls="spectra{0}" style="font-size: x-small;">Hide/Show</a></div>'.format(rating))
     f.write('\n</div>')
     f.write('\n<div class="row text-center text-lg-left collapse show" id="spectra{}">'.format(rating))
@@ -81,16 +85,20 @@ def output_footer(f):
     f.write('\n\n</div>\n</div>\n</body>\n</html>')
     return
 
-def output_j19_img(f, comp_name, rating):
+def output_j19_img(f, gaskap_name, j19_name, rating, sep=None):
+    name_text = gaskap_name
+    if sep:
+        name_text += ' at {:.1f} arcsec'.format(sep)
     f.write('\n<div class="col-4">')
-    f.write('\n<a href="spectra/{0}_spec.png" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(comp_name, rating))
+    f.write('\n<a href="spectra/{0}_spec.png" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(gaskap_name, rating))
     f.write('\n<img class="img-fluid img-thumbnail" ')
-    f.write('src="spectra/{0}_spec_zoom.png" alt="Zoomed preview of spectrum at {0}">'.format(comp_name))
-    f.write('\n</a>\n</div>')
+    f.write('src="spectra/{0}_spec_zoom.png" alt="Zoomed preview of spectrum at {0}">'.format(gaskap_name))
+    f.write('\n{0}</a>\n</div>'.format(name_text))
     f.write('\n<div class="col-8">')
-    f.write('\n<a href="jameson19plots/{0}.jpg" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(comp_name, rating))
+    j19_filename = '../jameson2019figset2/{}_lr.jpg'.format(j19_name)
+    f.write('\n<a href="{0}" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(j19_filename, rating))
     f.write('\n<img class="img-fluid img-thumbnail" ')
-    f.write('src="jameson19plots/{0}.jpg" alt="Zoomed preview of spectrum at {0}">'.format(comp_name))
+    f.write('src="{0}" alt="Zoomed preview of spectrum at {0}">'.format(j19_filename))
     f.write('\n</a>\n</div>')
 
     return
@@ -162,37 +170,87 @@ def output_mw_spectra(sbid, table, parent_folder, title, filename, threshold=Non
         output_footer(f)
 
 
-def output_j19_comparison(sbid, table, title, filename): 
-    print (title, filename)
-    crossmatch = ['J010029-713825', 'J003809-735023', 'J012639-731501', 'J012350-735041', 'J011132-730209', 
-                'J005611-710707', 'J011005-722648', 'J012930-733310', 'J013243-734413', 'J011919-710522', 
-                'J011917-710537', 'J012924-733152', 'J012629-732714', 'J013032-731740', 'J005820-713039',
-                'J010919-725600', 'J004808-741205', 'J004956-723553', 'J005337-723143', 'J005557-722604', 
-                'J010931-713454', 'J011056-731403', 'J011432-732142', 'J013147-734941', 'J003947-713734',
-                'J005238-731244', 'J003824-742211', 'J003939-714141', 'J011629-731438', 'J003754-725156',
-                'J003801-725210', 'J004047-714600', 'J005636-740315', 'J005652-712300', 'J005732-741243',
-                'J011049-731425', 'J011049-731428']
+def find_j19_matches(gaskap_table, no_match_cat=None):
+    print ('\nCross-matching with Jameson et al 2019', no_match_cat)
+    j19_table = ascii.read('jameson2019.csv', format='csv')
+    col_index = Column(name='index', data=1+np.arange(len(j19_table)))
+    j19_table.add_column(col_index)
 
-    mask = np.isin(table['comp_name'], crossmatch)
-    targets = table[mask]
-    comp_names = sorted(targets['comp_name'])
+    coo_j19 = SkyCoord(j19_table['ra']*u.deg, j19_table['dec']*u.deg)
+    coo_gaskap = SkyCoord(gaskap_table['ra']*u.deg, gaskap_table['dec']*u.deg)
+
+    idx_j19, d2d_j19, d3d_j19 = coo_gaskap.match_to_catalog_sky(coo_j19)
+    matched = d2d_j19 <= 18.5*u.arcsec # This cutoff allows for the widest separation without adding duplicates
+
+    matched_j19_idx = idx_j19[matched]
+    un_matched_j19_idx = [i for i in np.arange(len(j19_table)) if i not in matched_j19_idx]
+    j19_unmatched = j19_table[un_matched_j19_idx]
+    print ("Found {} sources in Jameson et al 2019 not in GASKAP data.".format(len(j19_unmatched)))
+    coo_j19_unm = SkyCoord(j19_unmatched['ra']*u.deg, j19_unmatched['dec']*u.deg)
+    idx_gaskap, d2d_gaskap, d3d_gaskap = coo_j19_unm.match_to_catalog_sky(coo_gaskap)
+    close_gaskap_comp_names = gaskap_table[idx_gaskap]['comp_name']
+    col_closest = Column(name='closest_gaskap', data=close_gaskap_comp_names)
+    col_gaskap_ra = Column(name='gaskap_ra', data=gaskap_table[idx_gaskap]['ra'])
+    col_gaskap_dec = Column(name='gaskap_dec', data=gaskap_table[idx_gaskap]['dec'])
+    col_sep = Column(name='gaskap_sep', data=d2d_gaskap.to(u.arcsec))
+    j19_unmatched.add_columns([col_closest, col_gaskap_ra, col_gaskap_dec, col_sep])
+    if no_match_cat:
+        print (j19_unmatched)
+        j19_unm_vo_table = from_table(j19_unmatched)
+        writeto(j19_unm_vo_table, no_match_cat)
+
+    return j19_table, idx_j19, d2d_j19, matched, j19_unmatched
+
+
+def output_j19_comparison(sbid, gaskap_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched, title, filename, match_cat=None): 
+    print (title, filename)
+
+    gaskap_targets = gaskap_table[j19_match]
+    j19_targets = j19_table[idx_j19]
+    j19_targets = j19_targets[j19_match]
+    sort_order = gaskap_targets.argsort(['comp_name'])
+    #comp_names = sorted(targets['comp_name'])
+    gaskap_tgt_ordered = gaskap_targets[sort_order]
+    j19_tgt_ordered = j19_targets[sort_order]
 
     with open(filename, 'w') as f:
         output_header(f, title)
 
         for rating in 'ABCDEF':
-            targets = table[table['rating']==rating]
-            mask = np.isin(targets['comp_name'], crossmatch)
-            targets = targets[mask]
-            comp_names = sorted(targets['comp_name'])
-            print('Rating {} has {} spectra'.format(rating, len(comp_names)))
+            mask = gaskap_tgt_ordered['rating']==rating
+            subset = gaskap_tgt_ordered[mask]
+            j19_subset = j19_tgt_ordered[mask]
+            print('Rating {} has {} spectra'.format(rating, len(subset)))
 
-            output_block_title(f, rating, rating=='A', len(comp_names))
+            output_block_title(f, rating, rating=='A', len(subset))
 
-            for name in comp_names:
-                output_j19_img(f, name, rating)
+            for idx, gaskap_src in enumerate(subset):
+                gaskap_name  = gaskap_src['comp_name']
+                j19_name = j19_subset[idx]['Source']
+                output_j19_img(f, gaskap_name, j19_name, rating)
+
+        # Add a section for missed spectra
+        output_block_title(f, None, False, len(j19_unmatched))
+        for row in j19_unmatched:
+            gaskap_name  = row['closest_gaskap']
+            j19_name = row['Source']
+            output_j19_img(f, gaskap_name, j19_name, rating, sep=row['gaskap_sep'])
 
         output_footer(f)
+
+    if match_cat:
+        augmented_table = Table(gaskap_tgt_ordered)
+        close_j19_comp_names = j19_tgt_ordered['Source']
+        col_closest = Column(name='closest_j19', data=close_j19_comp_names)
+        col_gaskap_ra = Column(name='j19_ra', data=j19_tgt_ordered['ra']*u.deg)
+        col_gaskap_dec = Column(name='j19_dec', data=j19_tgt_ordered['dec']*u.deg)
+        sep_vals = d2d_j19[j19_match]
+        sep_vals_sorted = sep_vals[sort_order]
+        col_sep = Column(name='j19_sep', data=sep_vals_sorted.to(u.arcsec))
+        augmented_table.add_columns([col_closest, col_gaskap_ra, col_gaskap_dec, col_sep])
+        print (augmented_table)
+        j19_match_vo_table = from_table(augmented_table)
+        writeto(j19_match_vo_table, match_cat)
 
 
 def main():
@@ -222,9 +280,10 @@ def main():
     output_mw_spectra(args.sbid, spectra_table, parent_folder, 'Absorption spectra for SBID {} with {}σ candidate Milky Way detections'.format(
         args.sbid, args.good), '{}/mw_detections.html'.format(parent_folder), threshold=args.good)
 
-    if args.sbid == 8906:
-        output_j19_comparison(args.sbid, spectra_table, 'Absorption spectra for SBID {} also in Jameson 19'.format(
-            args.sbid), '{}/j19.html'.format(parent_folder))
+    if args.sbid in (8906, 10941, 10944):
+        j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched = find_j19_matches(spectra_table, no_match_cat='{}/j19_not_matched.vot'.format(parent_folder))
+        output_j19_comparison(args.sbid, spectra_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched,
+            'Absorption spectra for SBID {} also in Jameson 19'.format(args.sbid), '{}/j19.html'.format(parent_folder), match_cat='{}/askap_spectra_in_j19.vot'.format(parent_folder))
 
     # Report
     end = time.time()
