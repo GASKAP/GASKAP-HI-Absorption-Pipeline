@@ -118,7 +118,7 @@ def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, s
     fig.savefig(figname+'.png')
     fig.close()
 
-def get_source(file_list, target, folder, selavy_table):
+def get_source(file_list, target, folder, selavy_table, scaling_factor=1.0):
     
     fname = '{}{}_sl.fits'.format(folder, target['comp_name'])
     if not fname in file_list:
@@ -126,7 +126,7 @@ def get_source(file_list, target, folder, selavy_table):
     
     comp_cat_row= selavy_table[selavy_table['component_name']==target['comp_name']][0]
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
-           'a':comp_cat_row['maj_axis']/2, 'b':comp_cat_row['min_axis']/2, 'pa': comp_cat_row['pos_ang'],
+           'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
           'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak']}
     return src
     
@@ -187,18 +187,18 @@ def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, comp_na
 
 
 
-def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, max_spectra = 5000):
+def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, max_spectra = 5000):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
-            'max_s_max_n', 'min_opacity', 'semi_maj_axis', 'semi_min_axis', 'pa'),
+            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h'),
             dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64'),
-            meta={'name': 'ASKAP SMC Spectra'})
+            'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
+            meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
 
     print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
     for tgt in targets:
-        src = get_source(file_list, tgt, cutouts_folder, selavy_table)
+        src = get_source(file_list, tgt, cutouts_folder, selavy_table, scaling_factor=0.8)
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
             continue
@@ -220,15 +220,33 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
         opacity = spectrum.flux/mean_cont
         sigma_opacity = sd_cont*np.ones(spectrum.velocity.shape)
         min_opacity = np.min(opacity)
+        vel_min_opacity = spectrum.velocity[np.argmin(opacity)]
+        max_opacity = np.max(opacity)
+        num_noise = (opacity > 1+sd_cont).sum()
+
+        print (vel_min_opacity)
         rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(opacity, sd_cont)
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, src['comp_name'], continuum_start_vel, continuum_end_vel)
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
-                        rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, min_opacity, 
-                        src['a'], src['b'], src['pa']])
+                        rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
+                        min_opacity, vel_min_opacity, src['a'], src['b'], src['pa'], 0])
 
     return src_table
+
+
+def add_column_density(spectra_table):
+    # read in mom0 map
+    gass_mom0 = fits.open('hi_zea_ms_mom0.fits')
+    gass_wcs = WCS(gass_mom0[0].header)
+    gass_no_nan_data = np.nan_to_num(gass_mom0[0].data)
+    gass_nh_data = gass_no_nan_data * 1.82 * 10**18 /1e3
+
+    # Calculate all column density values
+    pix_pos = gass_wcs.wcs_world2pix(spectra_table['ra'], spectra_table['dec'], 0)
+    n_h_vals = gass_nh_data[pix_pos[1].astype(int), pix_pos[0].astype(int)]
+    spectra_table['n_h'] = n_h_vals
 
 
 def prep_folders(folders):
@@ -327,7 +345,7 @@ def add_sources(ax, sources,detection, best):
         sigma = (1-src['min_opacity'])/src['sd_cont']
         marker = '.'
         if sigma > best:
-            marker = 'o'
+            marker = 'o' if src['vel_min_opacity'] > 50*u.km.to(u.m) else 's'
             facecolor = 'none'
             colour_name = 'red'
 
@@ -437,7 +455,8 @@ def main():
     selavy_table = src_votable.get_first_table().to_table()
     rename_columns(selavy_table)
     
-    spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder,spectra_folder)
+    spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
+    add_column_density(spectra_table)
 
     spectra_vo_table = from_table(spectra_table)
     writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
