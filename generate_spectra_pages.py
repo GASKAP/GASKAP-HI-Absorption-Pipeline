@@ -39,7 +39,7 @@ def output_header(f, title):
     f.write('\n<h1 align="middle">{}</h1>'.format(title))
     return
 
-def output_location_plots(f):
+def output_location_plots(f, source_map='figures/source_loc.png'):
     f.write('\n<div class="row px-3" id="maps">')
     f.write('\n<div class="col-md-auto"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">Location</hs></div>')
     f.write('\n<div class="col-md-auto">')
@@ -47,8 +47,8 @@ def output_location_plots(f):
     f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/field_loc.png" alt="Map of the location of the field.">')
     f.write('\n</a>\n</div>')
     f.write('\n<div class="col-md-auto">')
-    f.write('\n<a href="figures/source_loc.png" class="d-block mb-4 h-100"  data-lightbox="maps">')
-    f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/source_loc.png" alt="Map of the location of the sources.">')
+    f.write('\n<a href="{}" class="d-block mb-4 h-100"  data-lightbox="maps">'.format(source_map))
+    f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="{}" alt="Map of the location of the sources.">'.format(source_map))
     f.write('\n</a>\n</div>')
     f.write('\n</div>')
 
@@ -64,12 +64,19 @@ def output_block_title(f, rating, first, count):
     f.write('\n<div class="row text-center text-lg-left collapse show" id="spectra{}">'.format(rating))
 
     
-def output_img(f, comp_name, rating):
+def output_img(f, comp_name, rating, id, combined=False):
+    zoom_file_pattern = 'spectra/{0}_combined.png' if combined else 'spectra/{0}_spec_zoom.png'
+    zoom_filename = zoom_file_pattern.format(comp_name)
+    file_pattern = 'spectra/{0}_combined.png' if combined else 'spectra/{0}_spec.png'
+    filename = file_pattern.format(comp_name)
     f.write('\n<div class="col-lg-3 col-md-4 col-6 px-2">')
-    f.write('\n<a href="spectra/{0}_spec.png" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(comp_name, rating))
+    f.write('<figure class="figure d-block">')
+    f.write('\n<a href="{0}" class="mb-4"  data-lightbox="rating{1}">'.format(filename, rating))
     f.write('\n<img class="img-fluid img-thumbnail" ')
-    f.write('src="spectra/{0}_spec_zoom.png" alt="Zoomed preview of spectrum at {0}">'.format(comp_name))
-    f.write('\n</a>\n</div>')
+    f.write('src="{0}" alt="Zoomed preview of spectrum at {1}">'.format(zoom_filename, comp_name))
+    f.write('\n</a>')
+    f.write('<figcaption class="figure-caption text-right">Source #{} {}</figcaption>'.format(id, comp_name))
+    f.write('\n</figure></div>')
     return
 
     
@@ -104,18 +111,24 @@ def output_j19_img(f, gaskap_name, j19_name, rating, sep=None):
     return
 
 
-def output_spectra(sbid, table, title, filename, threshold=None, verbose=False):
+def output_spectra(sbid, table, title, filename, threshold=None, verbose=False, source_map=None):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
 
-        output_location_plots(f)
+        if source_map:
+            output_location_plots(f, source_map=source_map)
+        else:    
+            output_location_plots(f)
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
             if threshold:
                 targets = targets[(1-targets['min_opacity'])/targets['sd_cont'] > threshold]
-            comp_names = sorted(targets['comp_name'])
+            sort_order = targets.argsort(['comp_name'])
+            sorted_targets = targets[sort_order]
+            comp_names = sorted_targets['comp_name']
+            ids = sorted_targets['id']
             print('Rating {} has {} spectra'.format(rating, len(comp_names)))
 
             if verbose:
@@ -123,8 +136,8 @@ def output_spectra(sbid, table, title, filename, threshold=None, verbose=False):
               
             output_block_title(f, rating, rating=='A', len(comp_names))
 
-            for name in comp_names:
-                output_img(f, name, rating)
+            for idx, name in enumerate(comp_names):
+                output_img(f, name, rating, ids[idx], combined=True)
                     
         output_footer(f)
 
@@ -248,7 +261,7 @@ def output_j19_comparison(sbid, gaskap_table, j19_table, idx_j19, d2d_j19, j19_m
         sep_vals_sorted = sep_vals[sort_order]
         col_sep = Column(name='j19_sep', data=sep_vals_sorted.to(u.arcsec))
         augmented_table.add_columns([col_closest, col_gaskap_ra, col_gaskap_dec, col_sep])
-        print (augmented_table)
+        #print (augmented_table)
         j19_match_vo_table = from_table(augmented_table)
         writeto(j19_match_vo_table, match_cat)
 
@@ -271,7 +284,7 @@ def main():
     spectra_table = spectra_votable.get_first_table().to_table()
 
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {}'.format(
-        args.sbid), '{}/index.html'.format(parent_folder))
+        args.sbid), '{}/all.html'.format(parent_folder))
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
         args.sbid, args.good), '{}/detections.html'.format(parent_folder), threshold=args.good)
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
@@ -284,6 +297,12 @@ def main():
         j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched = find_j19_matches(spectra_table, no_match_cat='{}/j19_not_matched.vot'.format(parent_folder))
         output_j19_comparison(args.sbid, spectra_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched,
             'Absorption spectra for SBID {} also in Jameson 19'.format(args.sbid), '{}/j19.html'.format(parent_folder), match_cat='{}/askap_spectra_in_j19.vot'.format(parent_folder))
+        non_j19_table = gaskap_targets = spectra_table[~j19_match]
+        print (len(non_j19_table))
+        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
+            args.sbid, args.good), '{}/non_j19_detections.html'.format(parent_folder), threshold=args.good, source_map='figures/source_loc_nonj19.png')
+        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
+            args.sbid, args.best), '{}/non_j19_best.html'.format(parent_folder), threshold=args.best, source_map='figures/source_loc_nonj19.png')
 
     # Report
     end = time.time()
