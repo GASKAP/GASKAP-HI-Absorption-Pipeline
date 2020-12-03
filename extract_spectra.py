@@ -1,5 +1,6 @@
 # Python script to produce spectra for a series of sub-cubes.
 # The spectra are assumed to be absoprtion spectra and rated according to their suitability for absorption detection.
+# Emission spectra extraction is based on work by Claire Murray
 
 # Author James Dempsey
 # Date 19 Feb 2020
@@ -17,7 +18,7 @@ from astropy.coordinates import SkyCoord, FK4
 from astropy.io import fits, votable
 from astropy.io.ascii import Csv
 from astropy.io.votable.tree import Param,Info
-from astropy.io.votable import from_table, writeto
+from astropy.io.votable import from_table, parse_single_table, writeto
 from astropy.table import QTable, Table, Column
 from astropy.utils.exceptions import AstropyWarning
 from astropy.visualization import simple_norm
@@ -31,7 +32,6 @@ import numpy.core.records as rec
 from spectral_cube import SpectralCube
 import radio_beam
 import aplpy
-import astropy.units as u
 
 
 from RadioAbsTools import cube_tools, spectrum_tools
@@ -50,6 +50,10 @@ def parseargs():
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
                         required=False)
+    parser.add_argument("-e", "--emission", help="The HI emission cube to source emission data around each source.",
+                        required=False)
+    parser.add_argument("--skip_abs", help="The HI emission cube to source emission data around each source.",
+                        action='store_true', required=False)
     args = parser.parse_args()
     return args
 
@@ -422,7 +426,172 @@ def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0
     print ("  Output", prefix+".png")
     fig.savefig(prefix + ".png", bbox_inches='tight')
     fig.savefig(prefix + ".pdf", bbox_inches='tight')
- 
+
+
+def plot_combined_spectrum(velocity, em_mean, em_std, abs_vel, opacity, sigma_std, filename, title, vel_range=None):
+    fig, axs = plt.subplots(2, 1, figsize=(8, 10))
+    
+    axs[0].set_title(title, fontsize=16)
+
+    axs[0].axhline(1, color='r')
+    axs[0].plot(abs_vel, opacity, zorder=4, lw=1)
+    axs[0].fill_between(abs_vel, 1-sigma_std, 1+sigma_std, color='lightgrey', zorder=1)
+    axs[0].set_ylabel(r'$e^{(-\tau)}$')
+    axs[0].grid(True)
+
+    axs[1].plot(velocity, em_mean, color='firebrick', zorder=4)
+    axs[1].fill_between(velocity, em_mean-em_std, em_mean+em_std, color='lightgrey', zorder=1)
+    axs[1].set_ylabel(r'$T_B (K)$')
+    axs[1].set_xlabel(r'Velocity relative to LSR (km/s)')
+    axs[1].grid(True)
+    
+    if vel_range is None:
+        vel_range = (np.min(velocity), np.max(velocity))
+    axs[0].set_xlim(vel_range)
+    axs[1].set_xlim(vel_range)
+
+    plt.savefig(filename, bbox_inches='tight')
+    #plt.show()
+    plt.close()
+    return
+
+
+def output_emission_spectrum(source, comp_name, velocity, em_mean, em_std, filename):
+    title = 'Emission for source #{} {}'.format(source['id'], comp_name)
+    em_out_tab = Table(meta={'name': title, 'id': comp_name, 'ra': source['ra']*u.deg, 'dec': source['dec']*u.deg, 'rating': source['rating']})
+    em_out_tab.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
+    em_out_tab.add_column(Column(name='em_mean', data=em_mean, unit='K', description='Mean brightness temperature'))
+    em_out_tab.add_column(Column(name='em_std', data=em_std, unit='K', description='Noise level in the brightness temperature'))
+    
+    votable = from_table(em_out_tab)
+    writeto(votable, filename)
+
+
+def extract_channel_slab(filename, chan_start, chan_end):
+    cube = SpectralCube.read(filename)
+    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    slab = vel_cube[chan_start:chan_end,:, :].with_spectral_unit(u.km/u.s)
+
+    header = fits.getheader(filename)
+    return slab
+
+
+def extract_emission_around_source(slab, pos, radius_outer, radius_inner):
+    xp = np.int(pos[0])
+    yp = np.int(pos[1])
+
+    # Only pull spectra whose positions fall on the footprint of the cube (this should be all, right?)
+    if (xp < radius_outer) or (xp > slab.shape[2]-radius_outer) or (yp < radius_outer) or (yp > slab.shape[1]-radius_outer):
+        print ("Skipping")
+        empty_result = np.zeros(slab.shape[0])
+        return empty_result, empty_result
+
+    # Define pixel coordinates of a grid surrounding each target
+    center = (xp, yp)
+    imin = center[0] - radius_outer
+    imax = center[0] + radius_outer + 1
+    jmin = center[1] - radius_outer
+    jmax = center[1] + radius_outer + 1
+
+    # loop through and pile in all spectra which fall in the annulus, based on their distance
+    # from the central pixel
+    print (imin, imax, jmin, jmax)
+    sub_specx = []
+    for k in np.arange(imin, imax):
+        for j in np.arange(jmin, jmax):
+            kj = np.array([k, j])
+            dist = np.linalg.norm(kj - np.array(center))
+            if dist > radius_inner and dist <= radius_outer:
+                spec = slab[:, kj[1], kj[0]]
+                sub_specx = sub_specx + [spec]
+    
+    #print (sub_specx)
+    # Compute the mean over all spectra
+    tb_mean = np.nanmean(sub_specx, axis=0)
+    # Estimate the uncertainty per channel via the standard deviation over all spectra
+    tb_std = np.nanstd(sub_specx, axis=0)
+    #print ('mean=',tb_mean)
+
+    return tb_mean, tb_std
+
+
+def extract_emission_spectra(cube, spectra_table, slab_size=40):
+    
+    # Read the cube
+    spec_cube = SpectralCube.read(cube)
+    vel_cube = spec_cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
+    wcs = vel_cube.wcs.celestial
+    spec_len =vel_cube.shape[0]
+    header = fits.getheader(cube)
+    velocities = vel_cube.spectral_axis
+
+    # Identify the target pixels for each spectrum
+    pixcoord = wcs.wcs_world2pix(spectra_table['ra'],spectra_table['dec'], 0)
+
+    radius_outer = 8
+    radius_inner = 4
+
+    # Extract the spectra
+    start = time.time()
+    print("  ## Started emission spectra extract at {} ##".format(
+          (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
+    prev = start
+    tb_mean_all = []
+    tb_std_all = []
+    for s in spectra_table:
+        tb_mean_all.append(np.zeros(spec_len))
+        tb_std_all.append(np.zeros(spec_len))
+    
+    # Extract using slabs
+    unit = None
+    prev = time.time()
+    for i in range(0,spec_len,slab_size):
+        max_idx = min(i+slab_size, spec_len)
+        slab = extract_channel_slab(cube, i, max_idx)
+        print (slab)
+        unit = slab.unit
+
+        #for j, pos in enumerate(pixcoord):
+        for j in range(len(pixcoord[0])):
+            pos = [pixcoord[0][j],pixcoord[1][j]]
+            #if j > 5:
+            #    break
+            tb_mean, tb_std = extract_emission_around_source(slab, pos, radius_outer, radius_inner)
+            tb_mean_all[j][i:max_idx] = tb_mean
+            tb_std_all[j][i:max_idx] = tb_std
+            #data = slab[:,pos[1], pos[0]]
+            #spectra_bright[j][i:max_idx] = data.value
+        
+        checkpoint = time.time()
+        print ("Scanning slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, checkpoint-prev))
+        prev = checkpoint
+
+    end = time.time()
+    print("  ## Finished emission spectra extract at {}, took {:.2f} s ##".format(
+          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
+    return tb_mean_all, tb_std_all, velocities.value
+
+
+def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder):
+    print (velocities)
+    for idx, source in enumerate(spectra_table):
+        tb_mean = tb_mean_all[idx]
+        tb_std = tb_std_all[idx]
+        comp_name = source['comp_name']
+        if np.sum(tb_mean) == 0:
+            print ("Source {} has all no emisision data".format(comp_name))
+        filename = '{}/{}_emission.vot'.format(spectra_folder, comp_name)
+        output_emission_spectrum(source, comp_name, velocities, tb_mean, tb_std, filename)
+
+        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
+        abs_spec_votable = parse_single_table(abs_spec_filename)
+        abs_spec = abs_spec_votable.to_table()
+
+        title = 'Source #{} {}'.format(source['id'], comp_name)
+        filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
+        plot_combined_spectrum(velocities/1000, tb_mean, tb_std, 
+            abs_spec['velocity']/1000, abs_spec['opacity'], abs_spec['sigma_opacity'], 
+            filename, title)
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
@@ -439,6 +608,10 @@ def main():
     if not os.path.exists(parent_folder):
         print("Error: Folder {} does not exist.".format(parent_folder))
         return 1
+    if args.emission and not os.path.exists(args.emission):
+        print("Error: File {} does not exist.".format(args.emission))
+        return 1
+
     cutout_folder = parent_folder + 'cutouts/'
     figures_folder = parent_folder + 'figures/'
     spectra_folder = parent_folder + 'spectra/'
@@ -455,14 +628,24 @@ def main():
     selavy_table = src_votable.get_first_table().to_table()
     rename_columns(selavy_table)
     
-    spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
-    add_column_density(spectra_table)
+    if args.skip_abs:
+        spectra_vo_table = parse_single_table(parent_folder+'askap_spectra.vot')
+        spectra_table = spectra_vo_table.to_table()
+        print (spectra_table)
+    else:
+        spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
+        add_column_density(spectra_table)
 
-    spectra_vo_table = from_table(spectra_table)
-    writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
+        spectra_vo_table = from_table(spectra_table)
+        writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
 
-    plot_source_loc_map(spectra_table, figures_folder)
-    plot_field_loc_map(spectra_table, figures_folder)
+        plot_source_loc_map(spectra_table, figures_folder)
+        plot_field_loc_map(spectra_table, figures_folder)
+
+    # Extract emission spectra
+    if args.emission:
+        tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, spectra_table)
+        output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder)
 
     # Report
     end = time.time()
