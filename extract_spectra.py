@@ -8,6 +8,7 @@
 import argparse
 import csv 
 import glob
+import itertools
 import math
 import os
 import time
@@ -26,6 +27,7 @@ from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+import matplotlib.colors as mcolors
 import numpy as np
 import numpy.core.records as rec
 
@@ -35,6 +37,29 @@ import aplpy
 
 
 from RadioAbsTools import cube_tools, spectrum_tools
+
+
+class AbsRun:
+    def __init__(self):
+        self.length = 0
+        self.start_idx = 0
+        self.start_vel = 0
+        self.end_vel = 0
+        self.max_sigma = 0
+    
+    def __init__(self, length, start_idx, start_vel, end_vel, max_sigma):
+        self.length = length
+        self.start_idx = start_idx
+        self.start_vel = start_vel
+        self.end_vel = end_vel
+        self.max_sigma = max_sigma
+
+    def __str__(self):
+        return "AbsRun: " + str(self.__dict__)
+    
+    def __repr__(self):
+        return "<AbsRun len:%s start:%s>" % (self.length, self.start_idx)
+
 
 
 def parseargs():
@@ -50,9 +75,9 @@ def parseargs():
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
                         required=False)
-    parser.add_argument("-e", "--emission", help="The HI emission cube to source emission data around each source.",
-                        required=False)
-    parser.add_argument("--skip_abs", help="The HI emission cube to source emission data around each source.",
+    #parser.add_argument("-e", "--emission", help="The HI emission cube to source emission data around each source.",
+    #                    required=False)
+    parser.add_argument("--skip_abs", help="Use the existing absorption spectra",
                         action='store_true', required=False)
     args = parser.parse_args()
     return args
@@ -122,19 +147,21 @@ def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, s
     fig.savefig(figname+'.png')
     fig.close()
 
-def get_source(file_list, target, folder, selavy_table, scaling_factor=1.0):
+def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0):
     
-    fname = '{}{}_sl.fits'.format(folder, target['comp_name'])
-    if not fname in file_list:
-        return None
+    fname = ''
+    if folder:
+        fname = '{}{}_sl.fits'.format(folder, target['comp_name'])
+        if not fname in file_list:
+            return None
     
     comp_cat_row= selavy_table[selavy_table['component_name']==target['comp_name']][0]
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
           'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak']}
     return src
-    
-def save_spectrum(velocity, opacity, flux, filename, 
+
+def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename, 
                    sigma_tau):
     """
     Write the spectrum (velocity, flux and opacity) to a votable format file.
@@ -150,6 +177,8 @@ def save_spectrum(velocity, opacity, flux, filename,
     table.add_column(Column(name='opacity', data=opacity, description='Absorption as exp(-tau)'))
     table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
     table.add_column(Column(name='sigma_opacity', data=sigma_tau, description='Noise in the absorption profile, relative to exp(-tau)'))
+    table.add_column(Column(name='em_mean', data=em_mean, unit='K', description='Mean brightness temperature around the source'))
+    table.add_column(Column(name='em_std', data=em_std, unit='K', description='Noise level in the brightness temperature'))
 
     votable = from_table(table)
     writeto(votable, filename)
@@ -182,62 +211,291 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
 
     return spectrum_array
 
-def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, comp_name, continuum_start_vel, continuum_end_vel):
+
+def highlight_features(ax, ranges):
+    if ranges is not None:
+        ylim = ax.get_ylim()
+        colors = list(mcolors.TABLEAU_COLORS.keys())
+        #y = np.arange(0.0, 2, 0.01)
+        for idx, rng in enumerate(ranges):
+            color_idx = (idx+1) % len(colors)
+            ax.fill_betweenx(ylim, rng[0], rng[1], color=colors[color_idx], alpha=0.2, zorder=-1)
+
+
+def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_opacity, filename, title, vel_range=None, ranges=None):
+    fig, axs = plt.subplots(2, 1, figsize=(8, 10))
+    
+    axs[0].set_title(title, fontsize=16)
+
+    axs[0].axhline(1, color='r')
+    axs[0].plot(velocity, opacity, zorder=4, lw=1)
+    axs[0].fill_between(velocity, 1-sigma_opacity, 1+sigma_opacity, color='grey', alpha=0.4, zorder=1)
+    axs[0].plot(velocity, 1-(3*sigma_opacity), zorder=1, lw=1, ls=":")
+    axs[0].set_ylabel(r'$e^{(-\tau)}$')
+    axs[0].grid(True)
+    highlight_features(axs[0], ranges)
+
+    axs[1].plot(velocity, em_mean, color='firebrick', zorder=4)
+    axs[1].fill_between(velocity, em_mean-em_std, em_mean+em_std, color='grey', alpha=0.4, zorder=1)
+    axs[1].set_ylabel(r'$T_B (K)$')
+    axs[1].set_xlabel(r'Velocity relative to LSR (km/s)')
+    axs[1].grid(True)
+    highlight_features(axs[1], ranges)
+    
+    if vel_range is None:
+        vel_range = (np.min(velocity), np.max(velocity))
+    axs[0].set_xlim(vel_range)
+    axs[1].set_xlim(vel_range)
+
+    plt.savefig(filename, bbox_inches='tight')
+    #plt.show()
+    plt.close()
+    return
+
+def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, em_mean, em_std, comp_name, src_id, continuum_start_vel, continuum_end_vel):
     filename = '{}/{}_spec'.format(spec_folder, comp_name)
 
-    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, filename+'.vot', sigma_opacity)
+    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, em_mean, em_std, filename+'.vot', sigma_opacity)
     spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_opacity, range=None)
     spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'_zoom.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_opacity, range=(75,275))
 
 
+def match_emission_to_absorption(em_mean, em_std, em_velocity, abs_velocity):
+    em_vel_pos = (em_velocity[1] - em_velocity[0]) > 0
+    abs_vel_pos = (abs_velocity[1] - abs_velocity[0]) > 0
+    if abs_vel_pos != em_vel_pos:
+        #print("Reversing emission data")
+        em_mean = np.flip(em_mean, 0)
+        em_std = np.flip(em_std, 0)
+        em_velocity = np.flip(em_velocity, 0)
+    # tODO: Match the emission velocities against the absoprtion ones. Pad or trim the emisiosn as needed to get a consistent array size with the absorption velocities
+    # Can we assume these are already in the same scale? Maybe not if we intend to do higher spectral resolution spectra for some sources
+    em_mean_interp = np.interp(abs_velocity, em_velocity, em_mean, left=0, right=0)
+    em_std_interp = np.interp(abs_velocity, em_velocity, em_std, left=0, right=0)
+    return em_mean_interp, em_std_interp
+
+
+def calc_sigma_tau(cont_sd, em_mean, opacity):
+    """
+    Calculate the noise in the absorption profile at each velocity step. Where emission data is available, this is
+    based on the increased antenna temperature due to the received emission.
+
+    :param cont_sd: The measured noise in the continuum region of the spectrum in absorption units.
+    :param em_mean: The mean emission brightness temperature in K
+    :param opacity: The optical depth spectrum, used only for the shape of the data
+    :return: A numpy array containing the noise level in the optical depth data at each velocity step.
+    """
+
+    # ATCA figures tsys = 44.7 eta=0.5
+    tsys = 50.0 # Preliminary PAF figures from ASKAP Pilot Survey Plan, Hotan et al 2018
+    antenna_eff = 0.7 # 0.5
+    if len(em_mean) > 0:
+        floor = np.zeros(em_mean.shape)
+        sigma_tau = cont_sd * ((tsys + np.fmax(floor, antenna_eff*em_mean)) / tsys)
+    else:
+        sigma_tau = np.full(opacity.shape, cont_sd)
+    return sigma_tau
+
+
+def check_noise(opacity, sigma_opacity):
+    """
+    Check if the noise estimate of the spectrum is poor. A poor estimate will have a higher standard deviation than the
+    noise estimate even when any potential absoprtion is clipped out. Only low (less than 10) signal to noise spectrum will be flagged as 
+    having poor noise.
+
+    :param opacity: The optical depth spectrum
+    :param sigma_opacity: The noise lecel at each velocity step
+    :return true if the noise estimate is poor, false if it is good
+    """
+
+    opacity_ar = np.asarray(opacity)
+    noise = np.array(sigma_opacity)
+
+    signal_to_noise = (1-opacity_ar) / noise
+    max_sn = np.max(signal_to_noise)
+
+    clipped = np.array(opacity_ar, copy=True)
+    clipped[clipped<1-sigma_opacity] = 1
+    clipped_mean = np.mean(clipped)
+    clipped_std = np.std(clipped)
+    clipped_ratio = clipped_std/np.min(noise)
+    return (clipped_ratio > 1) & (max_sn < 10)
+
 
 def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, max_spectra = 5000):
-    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
-            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h'),
-            dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
-            meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
-
     print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
     for tgt in targets:
-        src = get_source(file_list, tgt, cutouts_folder, selavy_table, scaling_factor=0.8)
+        comp_name = tgt['comp_name']
+        src = get_source(file_list, tgt, selavy_table, folder=cutouts_folder, scaling_factor=0.8)
         if not src:
-            print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
+            print('Skipping missing src #{} {}'.format(tgt['id'], comp_name))
             continue
         i+=1
         if i > max_spectra:
             print ("Reaching maximum spectra for this run")
             break
             
-        print('\nExtracting spectrum for src #{} {} maj:{} min:{} pa:{:.3f}'.format(tgt['id'], tgt['comp_name'], src['a'], src['b'], src['pa']))
+        print('\nExtracting spectrum for src #{} {} maj:{} min:{} pa:{:.3f}'.format(tgt['id'], comp_name, src['a'], src['b'], src['pa']))
 
-        plot_mom0(src['fname'], tgt['comp_name'], figures_folder, src['ra'], src['dec'], 
+        plot_mom0(src['fname'], comp_name, figures_folder, src['ra'], src['dec'], 
                 src['a'], src['b'], src['pa'])
         
+        # Extract the spectrum
         continuum_start_vel = -100*u.km.to(u.m)
         continuum_end_vel = -60*u.km.to(u.m)
+        #continuum_start_vel = 30*u.km.to(u.m)
+        #continuum_end_vel = 73*u.km.to(u.m)
         spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder)
         
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
         sigma_opacity = sd_cont*np.ones(spectrum.velocity.shape)
+
+        # Read the primary beam emission spectrum
+        filename = '{0}/{1}_pb_emission.vot'.format(spectra_folder, comp_name)
+        emission_votable = votable.parse(filename, pedantic=False)
+        emission_tab = emission_votable.get_first_table().to_table()
+        pb_em_mean, pb_em_std = match_emission_to_absorption(emission_tab['pb_em_mean'], emission_tab['pb_em_std'], emission_tab['velocity'], spectrum.velocity)
+
+        # Calculate the noise envelope
+        sigma_opacity = calc_sigma_tau(sd_cont, pb_em_mean, opacity)
+
+        # Read the emission spectrum
+        filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
+        emission_votable = votable.parse(filename, pedantic=False)
+        emission_tab = emission_votable.get_first_table().to_table()
+        em_mean, em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
+
+        output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, em_mean, em_std, comp_name, tgt['id'], continuum_start_vel, continuum_end_vel)
+
+    return None
+
+
+def find_runs(spec_table, min_sigma=3, min_len=2):
+    runs = []
+    curr_idx = 0
+    single_min_sigma = min_sigma[0] if isinstance(min_sigma, list) else min_sigma
+    run_min_sigma = min_sigma[1] if isinstance(min_sigma, list) else min_sigma
+
+    single_sigma_filter = 1-spec_table['opacity'] > single_min_sigma*spec_table['sigma_opacity']
+    run_sigma_filter = 1-spec_table['opacity'] > run_min_sigma*spec_table['sigma_opacity']
+    sigma = (1-spec_table['opacity']) / spec_table['sigma_opacity']
+    #sigma3 = 1-spec_table['opacity'] > min_sigma*spec_table['sigma_opacity']
+    for bit, group in itertools.groupby(run_sigma_filter):
+        result = list(group)
+        length = sum(result)
+        #print (bit, group, length, result)
+        if length >= min_len:
+            # Check at least one channel passes the single channel threshold
+            if np.sum(single_sigma_filter[curr_idx:curr_idx+len(result)]) > 0:
+                vel_start = spec_table[curr_idx]['velocity']/1000
+                vel_end = spec_table[curr_idx+length-1]['velocity']/1000
+                max_sigma = np.max(sigma[curr_idx:curr_idx+length])
+                runs.append(AbsRun(length, curr_idx, vel_start, vel_end, max_sigma))
+                #print ("Found run of {} at {} from {:.2f} to {:.2f} km/s".format(length, curr_idx, vel_start, vel_end))
+        curr_idx += len(result)
+    return runs
+
+
+def merge_runs(runs_a, runs_b):
+    fullset = list(runs_a)
+    for abs_run in runs_b:
+        #print (abs_run)
+        present = False
+        for existing in runs_a:
+            #print ("..", existing)
+            if existing.start_vel < abs_run.end_vel and existing.end_vel > abs_run.start_vel:
+                # features overlap
+                present = True
+        if not present:
+            fullset.append(abs_run)
+    return fullset
+
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid):
+    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
+            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'has_mw_abs', 'has_other_abs', 
+            'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
+            dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            'float64', 'float64', 'float64', None, None, 'float64', 'float64', 'float64', 'float64', None),
+            meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
+
+    abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
+            'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
+            'start_vel', 'end_vel', 'length', 'peak_opacity', 'from_wide', 'max_sigma'),
+            dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
+            'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            'float64', 'float64', 'int', 'float64', None, 'float64'),
+            meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
+
+    print('Assessing {} spectra'.format(len(targets)))
+
+    i = 0
+    for tgt in targets:
+        comp_name = tgt['comp_name']
+        src = get_source(file_list, tgt, selavy_table, scaling_factor=0.8)
+        if not src:
+            print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
+            continue
+
+        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
+        if not os.path.exists(abs_spec_filename):
+            print ('No absorption spectrum found for {} at {}'.format(comp_name, abs_spec_filename))
+            continue
+        abs_spec_votable = parse_single_table(abs_spec_filename)
+        abs_spec = abs_spec_votable.to_table()
+
+        opacity = abs_spec['opacity']
+        sigma_opacity = abs_spec['sigma_opacity'] 
         min_opacity = np.min(opacity)
-        vel_min_opacity = spectrum.velocity[np.argmin(opacity)]
+        vel_min_opacity = abs_spec['velocity'][np.argmin(opacity)]
         max_opacity = np.max(opacity)
-        num_noise = (opacity > 1+sd_cont).sum()
+        num_noise = (opacity > 1+sigma_opacity).sum()
 
-        print (vel_min_opacity)
-        rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(opacity, sd_cont)
+        continuum_start_vel = -100*u.km.to(u.m)
+        continuum_end_vel = -60*u.km.to(u.m)
+        mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
-        output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, src['comp_name'], continuum_start_vel, continuum_end_vel)
+        poor_noise_flag = check_noise(opacity, sigma_opacity)
+
+        rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(opacity, np.mean(sigma_opacity))
+
+        has_mw_abs = False
+        has_other_abs = False
+        narrow_runs = find_runs(abs_spec, min_sigma=[3, 2.8], min_len=2)
+        wide_runs = find_runs(abs_spec, min_sigma=2.4, min_len=3)
+        runs = merge_runs(narrow_runs, wide_runs)
+        #runs = narrow_runs
+        if (len(runs) > 0):
+            for idx, absrow in enumerate(runs):
+                abs_name = '{}_{}'.format(tgt['comp_name'], int(absrow.start_vel))
+                if absrow.start_vel < 50:
+                    has_mw_abs = True
+                if absrow.start_vel >= 50:
+                    has_other_abs = True
+                from_wide = idx >= len(narrow_runs)
+                abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
+                    rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
+                    src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
+                    np.nanmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length]), from_wide, absrow.max_sigma])
+
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
                         rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
-                        min_opacity, vel_min_opacity, src['a'], src['b'], src['pa'], 0])
+                        min_opacity, vel_min_opacity, has_mw_abs, has_other_abs, src['a'], src['b'], src['pa'], 0, poor_noise_flag])
 
-    return src_table
+    for rating in 'ABCDEF':
+        count = np.sum(src_table['rating'] == rating)
+        print ("  Rating {}: {:.0f} sources".format(rating, count))
+
+    hits = np.sum(src_table['has_mw_abs'])
+    print ("  Has MW absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(targets)))
+    hits = np.sum(src_table['has_other_abs'])
+    print ("  Has other absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(targets)))
+    print ("  Found {} absorption instances".format(len(abs_table)))
+
+    return src_table, abs_table
 
 
 def add_column_density(spectra_table):
@@ -322,7 +580,7 @@ def add_source_box(ax, sources):
     print (centre_ra, centre_dec, width, height)
 
     r = Rectangle((min_ra, min_dec), width, height, edgecolor='green', facecolor='none',
-              transform=ax.get_transform('fk5'))
+              transform=ax.get_transform('fk5'), lw=3)
     ax.add_patch(r)
 
 
@@ -344,27 +602,27 @@ def get_field_centre(sources):
 def add_sources(ax, sources,detection, best):
 
     for src in sources:
-        colour_name = 'darkgray'
-        facecolor = 'darkgray'
+        colour_name = 'darkgreen'
+        facecolor = 'darkgreen'
         sigma = (1-src['min_opacity'])/src['sd_cont']
+    
         marker = '.'
-        if sigma > best:
-            marker = 'o' if src['vel_min_opacity'] > 50*u.km.to(u.m) else 's'
+        if src['has_other_abs']:
+            marker = 'o'
             facecolor = 'none'
-            colour_name = 'red'
+            colour_name = 'orange'
 
-        elif sigma > detection:
-            marker = '^'
+        elif src['has_mw_abs']:
+            marker = 's'
             facecolor = 'none'
-            colour_name = 'blue'
+            colour_name = 'yellow'
             
-        elif 'rating' not in src or src['rating'] <= 'B':
+        elif src['rating'] <= 'B':
             marker = '+'
             facecolor = 'darkgreen'
 
         ax.scatter([src['ra']], [src['dec']], transform=ax.get_transform('world'), 
-               marker=marker, edgecolor=colour_name, facecolor=facecolor)#,
-               #s=300, edgecolor=colour_name, facecolor='none', lw=2)
+               marker=marker, edgecolor=colour_name, facecolor=facecolor)
 
 
 def plot_background_map(fig, background):
@@ -428,160 +686,19 @@ def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0
     fig.savefig(prefix + ".pdf", bbox_inches='tight')
 
 
-def plot_combined_spectrum(velocity, em_mean, em_std, abs_vel, opacity, sigma_std, filename, title, vel_range=None):
-    fig, axs = plt.subplots(2, 1, figsize=(8, 10))
-    
-    axs[0].set_title(title, fontsize=16)
-
-    axs[0].axhline(1, color='r')
-    axs[0].plot(abs_vel, opacity, zorder=4, lw=1)
-    axs[0].fill_between(abs_vel, 1-sigma_std, 1+sigma_std, color='lightgrey', zorder=1)
-    axs[0].set_ylabel(r'$e^{(-\tau)}$')
-    axs[0].grid(True)
-
-    axs[1].plot(velocity, em_mean, color='firebrick', zorder=4)
-    axs[1].fill_between(velocity, em_mean-em_std, em_mean+em_std, color='lightgrey', zorder=1)
-    axs[1].set_ylabel(r'$T_B (K)$')
-    axs[1].set_xlabel(r'Velocity relative to LSR (km/s)')
-    axs[1].grid(True)
-    
-    if vel_range is None:
-        vel_range = (np.min(velocity), np.max(velocity))
-    axs[0].set_xlim(vel_range)
-    axs[1].set_xlim(vel_range)
-
-    plt.savefig(filename, bbox_inches='tight')
-    #plt.show()
-    plt.close()
-    return
-
-
-def output_emission_spectrum(source, comp_name, velocity, em_mean, em_std, filename):
-    title = 'Emission for source #{} {}'.format(source['id'], comp_name)
-    em_out_tab = Table(meta={'name': title, 'id': comp_name, 'ra': source['ra']*u.deg, 'dec': source['dec']*u.deg, 'rating': source['rating']})
-    em_out_tab.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
-    em_out_tab.add_column(Column(name='em_mean', data=em_mean, unit='K', description='Mean brightness temperature'))
-    em_out_tab.add_column(Column(name='em_std', data=em_std, unit='K', description='Noise level in the brightness temperature'))
-    
-    votable = from_table(em_out_tab)
-    writeto(votable, filename)
-
-
-def extract_channel_slab(filename, chan_start, chan_end):
-    cube = SpectralCube.read(filename)
-    vel_cube = cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
-    slab = vel_cube[chan_start:chan_end,:, :].with_spectral_unit(u.km/u.s)
-
-    header = fits.getheader(filename)
-    return slab
-
-
-def extract_emission_around_source(slab, pos, radius_outer, radius_inner):
-    xp = np.int(pos[0])
-    yp = np.int(pos[1])
-
-    # Only pull spectra whose positions fall on the footprint of the cube (this should be all, right?)
-    if (xp < radius_outer) or (xp > slab.shape[2]-radius_outer) or (yp < radius_outer) or (yp > slab.shape[1]-radius_outer):
-        print ("Skipping")
-        empty_result = np.zeros(slab.shape[0])
-        return empty_result, empty_result
-
-    # Define pixel coordinates of a grid surrounding each target
-    center = (xp, yp)
-    imin = center[0] - radius_outer
-    imax = center[0] + radius_outer + 1
-    jmin = center[1] - radius_outer
-    jmax = center[1] + radius_outer + 1
-
-    # loop through and pile in all spectra which fall in the annulus, based on their distance
-    # from the central pixel
-    print (imin, imax, jmin, jmax)
-    sub_specx = []
-    for k in np.arange(imin, imax):
-        for j in np.arange(jmin, jmax):
-            kj = np.array([k, j])
-            dist = np.linalg.norm(kj - np.array(center))
-            if dist > radius_inner and dist <= radius_outer:
-                spec = slab[:, kj[1], kj[0]]
-                sub_specx = sub_specx + [spec]
-    
-    #print (sub_specx)
-    # Compute the mean over all spectra
-    tb_mean = np.nanmean(sub_specx, axis=0)
-    # Estimate the uncertainty per channel via the standard deviation over all spectra
-    tb_std = np.nanstd(sub_specx, axis=0)
-    #print ('mean=',tb_mean)
-
-    return tb_mean, tb_std
-
-
-def extract_emission_spectra(cube, spectra_table, slab_size=40):
-    
-    # Read the cube
-    spec_cube = SpectralCube.read(cube)
-    vel_cube = spec_cube.with_spectral_unit(u.m/u.s, velocity_convention='radio')
-    wcs = vel_cube.wcs.celestial
-    spec_len =vel_cube.shape[0]
-    header = fits.getheader(cube)
-    velocities = vel_cube.spectral_axis
-
-    # Identify the target pixels for each spectrum
-    pixcoord = wcs.wcs_world2pix(spectra_table['ra'],spectra_table['dec'], 0)
-
-    radius_outer = 8
-    radius_inner = 4
-
-    # Extract the spectra
-    start = time.time()
-    print("  ## Started emission spectra extract at {} ##".format(
-          (time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)))))
-    prev = start
-    tb_mean_all = []
-    tb_std_all = []
-    for s in spectra_table:
-        tb_mean_all.append(np.zeros(spec_len))
-        tb_std_all.append(np.zeros(spec_len))
-    
-    # Extract using slabs
-    unit = None
-    prev = time.time()
-    for i in range(0,spec_len,slab_size):
-        max_idx = min(i+slab_size, spec_len)
-        slab = extract_channel_slab(cube, i, max_idx)
-        print (slab)
-        unit = slab.unit
-
-        #for j, pos in enumerate(pixcoord):
-        for j in range(len(pixcoord[0])):
-            pos = [pixcoord[0][j],pixcoord[1][j]]
-            #if j > 5:
-            #    break
-            tb_mean, tb_std = extract_emission_around_source(slab, pos, radius_outer, radius_inner)
-            tb_mean_all[j][i:max_idx] = tb_mean
-            tb_std_all[j][i:max_idx] = tb_std
-            #data = slab[:,pos[1], pos[0]]
-            #spectra_bright[j][i:max_idx] = data.value
-        
-        checkpoint = time.time()
-        print ("Scanning slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, checkpoint-prev))
-        prev = checkpoint
-
-    end = time.time()
-    print("  ## Finished emission spectra extract at {}, took {:.2f} s ##".format(
-          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
-    return tb_mean_all, tb_std_all, velocities.value
-
-
-def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder):
-    print (velocities)
+def output_emission_spectra(spectra_table, spectra_folder):
     for idx, source in enumerate(spectra_table):
-        tb_mean = tb_mean_all[idx]
-        tb_std = tb_std_all[idx]
         comp_name = source['comp_name']
+        filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
+        emission_votable = votable.parse(filename, pedantic=False)
+        emission_tab = emission_votable.get_first_table().to_table()
+
+        velocities = emission_tab['velocity']
+        tb_mean = emission_tab['em_mean']
+        tb_std = emission_tab['em_std']
+
         if np.sum(tb_mean) == 0:
             print ("Source {} has all no emisision data".format(comp_name))
-        filename = '{}/{}_emission.vot'.format(spectra_folder, comp_name)
-        output_emission_spectrum(source, comp_name, velocities, tb_mean, tb_std, filename)
 
         abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
         abs_spec_votable = parse_single_table(abs_spec_filename)
@@ -592,6 +709,29 @@ def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, 
         plot_combined_spectrum(velocities/1000, tb_mean, tb_std, 
             abs_spec['velocity']/1000, abs_spec['opacity'], abs_spec['sigma_opacity'], 
             filename, title)
+
+
+def plot_all_spectra(spectra_table, abs_table, spectra_folder):
+    for idx, source in enumerate(spectra_table):
+        comp_name = source['comp_name']
+
+        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
+        abs_spec_votable = parse_single_table(abs_spec_filename)
+        abs_spec = abs_spec_votable.to_table()
+        abs_velocity = abs_spec['velocity']
+
+        tgt_abs = abs_table[abs_table['comp_name']==comp_name]
+        start_vel = tgt_abs['start_vel'].data
+        end_vel = tgt_abs['end_vel'].data
+        ranges = np.stack((start_vel,end_vel), axis=-1)
+
+        title = 'Source #{} {}'.format(source['id'], comp_name)
+        filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
+        plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
+            abs_spec['opacity'], abs_spec['sigma_opacity'], 
+            filename, title, ranges=ranges, vel_range=(75,350))
+
+
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
@@ -608,9 +748,6 @@ def main():
     if not os.path.exists(parent_folder):
         print("Error: Folder {} does not exist.".format(parent_folder))
         return 1
-    if args.emission and not os.path.exists(args.emission):
-        print("Error: File {} does not exist.".format(args.emission))
-        return 1
 
     cutout_folder = parent_folder + 'cutouts/'
     figures_folder = parent_folder + 'figures/'
@@ -623,36 +760,39 @@ def main():
     targets = read_targets('targets_{}.csv'.format(args.sbid))
     
     # Read and filter catalogue
-    #src_votable = votable.parse('AS037_Continuum_Component_Catalogue_8906_100.votable', pedantic=False)
     src_votable = votable.parse(args.catalogue, pedantic=False)
     selavy_table = src_votable.get_first_table().to_table()
     rename_columns(selavy_table)
-    
-    if args.skip_abs:
-        spectra_vo_table = parse_single_table(parent_folder+'askap_spectra.vot')
-        spectra_table = spectra_vo_table.to_table()
-        print (spectra_table)
+
+    if not args.skip_abs:    
+        # Extract absorption spectra (including noise and emission)
+        spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
     else:
-        spectra_table = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
-        add_column_density(spectra_table)
+        print ("**Skipping spectra extraction - reusing existing spectra")
 
-        spectra_vo_table = from_table(spectra_table)
-        writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
+    # Assess spectra - rating, consecutive significant channels (flag if mw or other abs)
+    spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, args.sbid)
+    add_column_density(spectra_table)
 
-        plot_source_loc_map(spectra_table, figures_folder)
-        plot_field_loc_map(spectra_table, figures_folder)
+    # Save spectra catalogue
+    spectra_vo_table = from_table(spectra_table)
+    writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
 
-    # Extract emission spectra
-    if args.emission:
-        tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, spectra_table)
-        output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder)
+    # Save absorption catalogue
+    abs_vo_table = from_table(abs_table)
+    writeto(abs_vo_table, parent_folder+'askap_absorption.vot')
+
+    # Produce consolidated plots
+    plot_source_loc_map(spectra_table, figures_folder)
+    plot_field_loc_map(spectra_table, figures_folder)
+    plot_all_spectra(spectra_table, abs_table, spectra_folder)
 
     # Report
     end = time.time()
     print('#### Processing completed at %s ####' %
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)))
-    print('Extracted %d spectra in %.02f s' %
-          (len(spectra_table), end - start))
+    print('Extracted %d spectra and %d absorption instances in %.02f s' %
+          (len(spectra_table), len(abs_table), end - start))
 
     return 0
 
