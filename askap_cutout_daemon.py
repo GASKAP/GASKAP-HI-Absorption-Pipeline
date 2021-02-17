@@ -343,6 +343,7 @@ def main():
     print (' Status folder', args.status_folder)
     print (' Log folder', args.log_folder)
     print (' Source filename', args.filename)
+    print (' Target list', args.target_list)
     print (' Concurrency max {} min {}'.format(args.concurrency_limit, args.min_concurrency_limit))
     print (' Batch system', ('PBS' if args.pbs else 'None'))
 

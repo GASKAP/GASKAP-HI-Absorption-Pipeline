@@ -79,6 +79,13 @@ def parseargs():
     #                    required=False)
     parser.add_argument("--skip_abs", help="Use the existing absorption spectra",
                         action='store_true', required=False)
+    parser.add_argument("--continuum_start", help="The lowest velocity (in km/s) of the conitnuum region.", type=int, 
+                        default=-100, required=False)
+    parser.add_argument("--continuum_end", help="The lowest velocity (in km/s) of the conitnuum region.", type=int, 
+                        default=-60, required=False)
+    parser.add_argument("--no_zoom", help="Don't zoom in the combined spectra",
+                        action='store_true', required=False)
+
     args = parser.parse_args()
     return args
 
@@ -322,7 +329,7 @@ def check_noise(opacity, sigma_opacity):
     return (clipped_ratio > 1) & (max_sn < 10)
 
 
-def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, max_spectra = 5000):
+def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, max_spectra = 5000, cont_range=(-100,-60)):
     print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
@@ -343,10 +350,10 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
                 src['a'], src['b'], src['pa'])
         
         # Extract the spectrum
-        continuum_start_vel = -100*u.km.to(u.m)
-        continuum_end_vel = -60*u.km.to(u.m)
-        #continuum_start_vel = 30*u.km.to(u.m)
-        #continuum_end_vel = 73*u.km.to(u.m)
+        #continuum_start_vel = -100*u.km.to(u.m)
+        #continuum_end_vel = -60*u.km.to(u.m)
+        continuum_start_vel = cont_range[0]*u.km.to(u.m)
+        continuum_end_vel = cont_range[1]*u.km.to(u.m)
         spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder)
         
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
@@ -364,9 +371,12 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
 
         # Read the emission spectrum
         filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
-        emission_votable = votable.parse(filename, pedantic=False)
-        emission_tab = emission_votable.get_first_table().to_table()
-        em_mean, em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
+        if os.path.exists(filename):
+            emission_votable = votable.parse(filename, pedantic=False)
+            emission_tab = emission_votable.get_first_table().to_table()
+            em_mean, em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
+        else:
+            em_mean = em_std = np.zeros(spectrum.velocity.shape)
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, em_mean, em_std, comp_name, tgt['id'], continuum_start_vel, continuum_end_vel)
 
@@ -413,7 +423,7 @@ def merge_runs(runs_a, runs_b):
             fullset.append(abs_run)
     return fullset
 
-def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid):
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, cont_range=(-100,-60)):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'has_mw_abs', 'has_other_abs', 
             'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
@@ -423,10 +433,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
-            'start_vel', 'end_vel', 'length', 'min_opacity', 'max_sigma', 'from_wide'),
+            'start_vel', 'end_vel', 'length', 'min_opacity', 'max_sigma'),
             dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'int', 'float64', 'float64', None),
+            'float64', 'float64', 'int', 'float64', 'float64'),
             meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
 
     print('Assessing {} spectra'.format(len(targets)))
@@ -453,8 +463,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         max_opacity = np.max(opacity)
         num_noise = (opacity > 1+sigma_opacity).sum()
 
-        continuum_start_vel = -100*u.km.to(u.m)
-        continuum_end_vel = -60*u.km.to(u.m)
+        #continuum_start_vel = -100*u.km.to(u.m)
+        #continuum_end_vel = -60*u.km.to(u.m)
+        continuum_start_vel = cont_range[0]*u.km.to(u.m)
+        continuum_end_vel = cont_range[1]*u.km.to(u.m)
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
         poor_noise_flag = check_noise(opacity, sigma_opacity)
@@ -463,10 +475,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         has_mw_abs = False
         has_other_abs = False
-        narrow_runs = find_runs(abs_spec, min_sigma=[3, 2.8], min_len=2)
-        wide_runs = find_runs(abs_spec, min_sigma=2.4, min_len=3)
-        runs = merge_runs(narrow_runs, wide_runs)
-        #runs = narrow_runs
+        runs = find_runs(abs_spec, min_sigma=[3, 2.8], min_len=2)
         if (len(runs) > 0):
             for idx, absrow in enumerate(runs):
                 abs_name = '{}_{}'.format(tgt['comp_name'], int(absrow.start_vel))
@@ -474,11 +483,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                     has_mw_abs = True
                 if absrow.start_vel >= 50:
                     has_other_abs = True
-                from_wide = idx >= len(narrow_runs)
                 abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
                     rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
-                    np.nanmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length]), absrow.max_sigma, from_wide])
+                    np.nanmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length]), absrow.max_sigma])
 
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
@@ -507,8 +515,11 @@ def add_column_density(spectra_table):
 
     # Calculate all column density values
     pix_pos = gass_wcs.wcs_world2pix(spectra_table['ra'], spectra_table['dec'], 0)
-    n_h_vals = gass_nh_data[pix_pos[1].astype(int), pix_pos[0].astype(int)]
-    spectra_table['n_h'] = n_h_vals
+    if pix_pos and np.min(pix_pos) >= 0 and np.max(pix_pos[0]) < gass_nh_data.shape[1] and np.max(pix_pos[1]) < gass_nh_data.shape[0]:
+        n_h_vals = gass_nh_data[pix_pos[1].astype(int), pix_pos[0].astype(int)]
+        spectra_table['n_h'] = n_h_vals
+    else:
+        print ("No column density data available for this region")
 
 def add_col_metadata(vo_table, col_name, description, units=None, ucd=None, datatype=None):
     col = vo_table.get_first_table().get_field_by_id(col_name)
@@ -567,7 +578,6 @@ def add_absorption_column_metadata(abs_vo_table):
     add_col_metadata(abs_vo_table, 'length', 'The number of channels included in this absorption feature.', units='chan')
     add_col_metadata(abs_vo_table, 'min_opacity', 'The minimum opacity in the feature, in opacity units, representing the peak absorption.')
     add_col_metadata(abs_vo_table, 'max_sigma', 'The maximum significance of the absorption feature, representing the peak absorption.', ucd='stat.snr')
-    add_col_metadata(abs_vo_table, 'from_wide', 'Flag to indicate that the feature was detected using the wide criteria.', datatype='boolean')
 
 
 def prep_folders(folders):
@@ -716,7 +726,11 @@ def plot_source_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom
     ax, wcs = plot_background_map(fig, background)
 
     field_centre = get_field_centre(spectra_table)
-    recenter(ax, wcs, field_centre.ra.value, field_centre.dec.value, width=8.25, height=7.25)  # degrees
+    try:
+        recenter(ax, wcs, field_centre.ra.value, field_centre.dec.value, width=8.25, height=7.25)  # degrees
+    except Exception as ex:
+        print(ex)
+        return
 
     # Display the moment map image
     #plt.colorbar(im,fraction=0.046, pad=0.04)
@@ -770,7 +784,7 @@ def output_emission_spectra(spectra_table, spectra_folder):
             filename, title)
 
 
-def plot_all_spectra(spectra_table, abs_table, spectra_folder):
+def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom):
     for idx, source in enumerate(spectra_table):
         comp_name = source['comp_name']
 
@@ -783,12 +797,13 @@ def plot_all_spectra(spectra_table, abs_table, spectra_folder):
         start_vel = tgt_abs['start_vel'].data
         end_vel = tgt_abs['end_vel'].data
         ranges = np.stack((start_vel,end_vel), axis=-1)
+        vel_ranges = None if no_zoom else (75,350)
 
         title = 'Source #{} {}'.format(source['id'], comp_name)
         filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
         plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
             abs_spec['opacity'], abs_spec['sigma_opacity'], 
-            filename, title, ranges=ranges, vel_range=(75,350))
+            filename, title, ranges=ranges, vel_range=vel_ranges)
 
 
 
@@ -822,15 +837,18 @@ def main():
     src_votable = votable.parse(args.catalogue, pedantic=False)
     selavy_table = src_votable.get_first_table().to_table()
     rename_columns(selavy_table)
+    continuum_range = (args.continuum_start, args.continuum_end)
 
     if not args.skip_abs:    
         # Extract absorption spectra (including noise and emission)
-        spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, args.sbid)
+        spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
+            args.sbid, cont_range=continuum_range)
     else:
         print ("**Skipping spectra extraction - reusing existing spectra")
 
     # Assess spectra - rating, consecutive significant channels (flag if mw or other abs)
-    spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, args.sbid)
+    spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
+        args.sbid,  cont_range=continuum_range)
     add_column_density(spectra_table)
 
     # Save spectra catalogue
@@ -846,7 +864,7 @@ def main():
     # Produce consolidated plots
     plot_source_loc_map(spectra_table, figures_folder)
     plot_field_loc_map(spectra_table, figures_folder)
-    plot_all_spectra(spectra_table, abs_table, spectra_folder)
+    plot_all_spectra(spectra_table, abs_table, spectra_folder, args.no_zoom)
 
     # Report
     end = time.time()
