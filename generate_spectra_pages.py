@@ -6,7 +6,7 @@ import time
 
 from astropy.coordinates import SkyCoord
 from astropy.io import ascii, votable
-from astropy.io.votable import from_table, writeto
+from astropy.io.votable import parse_single_table, from_table, writeto
 from astropy.table import Column, Table
 import astropy.units as u
 import numpy as np
@@ -80,12 +80,17 @@ def output_img(f, comp_name, rating, id, combined=False):
     return
 
     
-def output_non_zoom_img(f, comp_name, rating):
+def output_non_zoom_img(f, comp_name, rating, id):
+    file_pattern = 'spectra/{0}_spec.png'
+    filename = file_pattern.format(comp_name)
     f.write('\n<div class="col-lg-3 col-md-4 col-6 px-2">')
-    f.write('\n<a href="spectra/{0}_spec.png" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(comp_name, rating))
+    f.write('<figure class="figure d-block">')
+    f.write('\n<a href="{0}" class="d-block mb-4 h-100"  data-lightbox="rating{1}">'.format(filename, rating))
     f.write('\n<img class="img-fluid img-thumbnail" ')
-    f.write('src="spectra/{0}_spec.png" alt="Preview of spectrum at {0}">'.format(comp_name))
-    f.write('\n</a>\n</div>')
+    f.write('src="{0}" alt="Preview of spectrum at {0}">'.format(filename))
+    f.write('\n</a>')
+    f.write('<figcaption class="figure-caption text-right">Source #{} {}</figcaption>'.format(id, comp_name))
+    f.write('\n</figure></div>')
     return
 
 def output_footer(f):
@@ -111,7 +116,7 @@ def output_j19_img(f, gaskap_name, j19_name, rating, sep=None):
     return
 
 
-def output_spectra(sbid, table, title, filename, threshold=None, verbose=False, source_map=None):
+def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=False, has_mw_abs=False, verbose=False, source_map=None):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
@@ -123,7 +128,11 @@ def output_spectra(sbid, table, title, filename, threshold=None, verbose=False, 
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
-            if threshold:
+            if has_other_abs:
+                targets = targets[targets['has_other_abs'] == 1]
+            elif has_mw_abs:
+                targets = targets[targets['has_mw_abs'] == 1]
+            elif threshold:
                 targets = targets[(1-targets['min_opacity'])/targets['sd_cont'] > threshold]
             sort_order = targets.argsort(['comp_name'])
             sorted_targets = targets[sort_order]
@@ -141,44 +150,91 @@ def output_spectra(sbid, table, title, filename, threshold=None, verbose=False, 
                     
         output_footer(f)
 
-def find_mw_vel_comp_names(comp_names, parent_folder, threshold, max_velocity):
-    mw_comp_names = []
-    for name in comp_names:
-        filename = '{0}/spectra/{1}_spec.vot'.format(parent_folder, name)
-        spectrum_votable = votable.parse(filename, pedantic=False)
-        spectrum_tab = spectrum_votable.get_first_table().to_table()
-        non_smc_vel_range = spectrum_tab['velocity'] < max_velocity
-        non_smc_spectrum = spectrum_tab[non_smc_vel_range]
-        non_smc_min_idx = np.argmin(non_smc_spectrum['opacity'])
-        signal = (1-non_smc_spectrum['opacity'][non_smc_min_idx])
-        sigma = signal/non_smc_spectrum['sigma_opacity'][non_smc_min_idx]
-        velocity = non_smc_spectrum['velocity'][non_smc_min_idx]*(u.m/u.s).to(u.km/u.s)
-        if sigma > threshold:
-            mw_comp_names.append(name)
-    return mw_comp_names
 
-
-
-
-def output_mw_spectra(sbid, table, parent_folder, title, filename, threshold=None, max_velocity=70*u.km/u.s):
+def output_listed_spectra(sbid, table, title, filename, comp_names_list, verbose=False, source_map=None, zoomed=True):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
 
-        output_location_plots(f)
+        if source_map:
+            output_location_plots(f, source_map=source_map)
+        else:    
+            output_location_plots(f)
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
-            if threshold:
-                targets = targets[(1-targets['min_opacity'])/targets['sd_cont'] > threshold]
-            comp_names = sorted(targets['comp_name'])
-            mw_comp_names = find_mw_vel_comp_names(comp_names, parent_folder, threshold, max_velocity)
-            print('Rating {} has {} spectra'.format(rating, len(mw_comp_names)))
+            targets = targets[np.in1d(targets['comp_name'], comp_names_list)]
+            sort_order = targets.argsort(['comp_name'])
+            sorted_targets = targets[sort_order]
+            comp_names = sorted_targets['comp_name']
+            ids = sorted_targets['id']
+            print('Rating {} has {} spectra'.format(rating, len(comp_names)))
 
-            output_block_title(f, rating, rating=='A', len(mw_comp_names))
+            if verbose:
+              print (comp_names)
+              
+            output_block_title(f, rating, rating=='A', len(comp_names))
 
-            for name in mw_comp_names:
-                output_non_zoom_img(f, name, rating)
+            for idx, name in enumerate(comp_names):
+                if zoomed:
+                    output_img(f, name, rating, ids[idx], combined=True)
+                else:
+                    output_non_zoom_img(f, name, rating, ids[idx])
+                    
+        output_footer(f)
+
+
+def output_diff_sigma_spectra(sbid, table, title, filename, verbose=False, source_map=None, zoomed=True):
+    print (title, filename)
+    with open(filename, 'w') as f:
+        output_header(f, title)
+
+        if source_map:
+            output_location_plots(f, source_map=source_map)
+        else:    
+            output_location_plots(f)
+
+        sigma_name_map = {2.8: ['J005518-714450', 'J010401-720206', 'J005116-734000', 'J010431-720726', 'J011157-734129', 'J010532-721331', 'J002620-743741'],
+        2.7:['J011332-740758', 'J003037-742903', 'J013218-715348', 'J005448-725353', 'J010556-714607', 'J012924-733153', 'J003208-735038', 'J012037-703843', 'J004306-732828'],
+        2.6:['J011134-711414', 'J005715-704046', 'J003936-742018', 'J002411-735717', 'J012306-695600', 'J005014-730326', 'J002222-742825', 'J010932-713453'],
+        2.5:['J014924-730231', 'J012945-701803', 'J005141-725545', 'J002826-703501', 'J002034-705526'],
+        3: ['J010532-721331', 'J005448-725353', 'J010556-714607', 'J005715-704046']}
+
+        for k,v in sigma_name_map.items():
+            #v = sigma_name_map[k]
+            print (k, v)
+            comp_names_list = v
+            if k < 2.8:
+                f.write('\n</div>')
+            if k < 3:
+                f.write('\n<h2>Spectra included at 2+ channels of {} sigma cutoff</h2>'.format(k))
+            else:
+                f.write('\n</div>\n<h2>Spectra included at 3+ channels of 2.5 sigma cutoff</h2>')
+
+            first = True
+            # TODO: Switch to use source lists
+            for rating in 'ABCDEF':
+                targets = table[table['rating']==rating]
+                targets = targets[np.in1d(targets['comp_name'], comp_names_list)]
+                sort_order = targets.argsort(['comp_name'])
+                sorted_targets = targets[sort_order]
+                comp_names = sorted_targets['comp_name']
+                ids = sorted_targets['id']
+                print('Rating {} has {} spectra'.format(rating, len(comp_names)))
+                if len(comp_names) == 0:
+                    continue
+
+                if verbose:
+                    print (comp_names)
+                
+                output_block_title(f, rating, first, len(comp_names))
+                first = False
+
+                for idx, name in enumerate(comp_names):
+                    if zoomed:
+                        output_img(f, name, rating, ids[idx], combined=True)
+                    else:
+                        output_non_zoom_img(f, name, rating, ids[idx])
                     
         output_footer(f)
 
@@ -190,7 +246,7 @@ def find_j19_matches(gaskap_table, no_match_cat=None):
     j19_table.add_column(col_index)
 
     coo_j19 = SkyCoord(j19_table['ra']*u.deg, j19_table['dec']*u.deg)
-    coo_gaskap = SkyCoord(gaskap_table['ra']*u.deg, gaskap_table['dec']*u.deg)
+    coo_gaskap = SkyCoord(gaskap_table['ra'], gaskap_table['dec'])
 
     idx_j19, d2d_j19, d3d_j19 = coo_gaskap.match_to_catalog_sky(coo_j19)
     matched = d2d_j19 <= 18.5*u.arcsec # This cutoff allows for the widest separation without adding duplicates
@@ -270,7 +326,7 @@ def main():
     args = parseargs()
 
     start = time.time()
-    print("#### Creating Started ASKAP spectra extraction for sbid {} at {} ####".format(args.sbid,
+    print("#### Started generating spectra pages for sbid {} at {} ####".format(args.sbid,
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start))))
 
     parent_folder = 'sb{}/'.format(args.sbid)
@@ -285,13 +341,47 @@ def main():
 
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {}'.format(
         args.sbid), '{}/all.html'.format(parent_folder))
+    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with non MW absorption features'.format(
+        args.sbid, args.good), '{}/detections.html'.format(parent_folder), has_other_abs=True)
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
-        args.sbid, args.good), '{}/detections.html'.format(parent_folder), threshold=args.good)
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
-        args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best, verbose=True)
+        args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best)
 
-    output_mw_spectra(args.sbid, spectra_table, parent_folder, 'Absorption spectra for SBID {} with {}σ candidate Milky Way detections'.format(
-        args.sbid, args.good), '{}/mw_detections.html'.format(parent_folder), threshold=args.good)
+    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with MW absorption features'.format(
+        args.sbid, args.best), '{}/mw_detections.html'.format(parent_folder), has_mw_abs=True)
+
+    output_diff_sigma_spectra(args.sbid, spectra_table, 'Comparison of sigma cutoffs', '{}/sigmacomp.html'.format(parent_folder))
+
+    missed_sources = ['J005448-725353', 'J010532-721331', 'J005014-730326', 'J012924-733153', 'J005217-730157', 'J010556-714607', 'J005141-725545', 'J004306-732828', 'J010401-720206', 
+        'J010359-720144', 'J010404-720145', 'J013032-731741', 'J003524-732223', 'J010919-725600', 'J013218-715348', 'J004718-723947', 'J010431-720726', 'J005116-734000', 'J003037-742903', 
+        'J003037-742901', 'J012733-713639', 'J010932-713453', 'J003936-742018', 'J004808-741206', 'J002411-735717', 'J002143-741500']
+    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} excluded by changed noise'.format(
+        args.sbid), '{}/excluded.html'.format(parent_folder), missed_sources)
+
+    wide_added = ['J012639-731502', 'J012639-731502', 'J005644-725200', 'J011408-732006', 'J005217-730157']
+    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} added by using 3 channels with 2.3 sigma match'.format(
+        args.sbid), '{}/wide.html'.format(parent_folder), wide_added)
+
+    bad_noise =  ['J004047-714600',
+        'J005218-722708',
+        'J005611-710707',
+        'J005732-741243',
+        'J010029-713826',
+        'J011049-731428',
+        'J011050-731426',
+        'J011134-711414',
+        'J011432-732143',
+        'J011815-695147',
+        'J012149-695645',
+        'J012546-731600',
+        'J013031-695115',
+        'J014114-740732']
+    bad_noise = ['J003749-735128',
+        'J010932-713453',
+        'J013134-700042',
+        'J013742-733050',
+        'J014105-722748']
+    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with poor noise estimates'.format(
+        args.sbid), '{}/bad_noise.html'.format(parent_folder), bad_noise)
 
     if args.sbid in (8906, 10941, 10944):
         j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched = find_j19_matches(spectra_table, no_match_cat='{}/j19_not_matched.vot'.format(parent_folder))
@@ -299,8 +389,8 @@ def main():
             'Absorption spectra for SBID {} also in Jameson 19'.format(args.sbid), '{}/j19.html'.format(parent_folder), match_cat='{}/askap_spectra_in_j19.vot'.format(parent_folder))
         non_j19_table = gaskap_targets = spectra_table[~j19_match]
         print (len(non_j19_table))
-        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
-            args.sbid, args.good), '{}/non_j19_detections.html'.format(parent_folder), threshold=args.good, source_map='figures/source_loc_nonj19.png')
+        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with absorption features'.format(
+            args.sbid), '{}/non_j19_detections.html'.format(parent_folder), has_other_abs=True, source_map='figures/source_loc_nonj19.png')
         output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
             args.sbid, args.best), '{}/non_j19_best.html'.format(parent_folder), threshold=args.best, source_map='figures/source_loc_nonj19.png')
 
@@ -308,7 +398,7 @@ def main():
     end = time.time()
     print('#### Processing completed at %s ####' %
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)))
-    print('Extracted %d spectra in %.02f s' %
+    print('Reported %d spectra in %.02f s' %
           (len(spectra_table), end - start))
 
     return 0
