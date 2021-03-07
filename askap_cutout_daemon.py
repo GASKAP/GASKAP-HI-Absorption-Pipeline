@@ -8,6 +8,7 @@
 import argparse
 import csv
 import datetime
+import glob
 
 import os
 import subprocess
@@ -58,6 +59,8 @@ def parseargs():
                         type=int, action='append')
     parser.add_argument("--target_file", help="A file listing the names of targets to be processed. If any targets are specified then only those targets are run.",
                         type=str)
+    parser.add_argument("--retry_failed", help="Cleanup any already failed jobs and retry them", default=False,
+                        action='store_true')
     args = parser.parse_args()
     return args
 
@@ -199,12 +202,16 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
             continue
 
     # Scan for jobs to start
-    for array_id in remaining_array_ids:
+    ids_to_scan = list(remaining_array_ids)
+    for array_id in ids_to_scan:
         if array_id in active_ids:
+            print ('{} is active'.format(array_id))
             continue
 
         comp_name = targets[array_id-1]
         if comp_name in completed_srcs:
+            print ('{} (#{}) has already completed as a different id!'.format(comp_name, array_id))
+            remaining_array_ids.remove(array_id)
             continue
 
 
@@ -330,6 +337,17 @@ def build_target_list(targets, target_ids, target_file):
     
     return target_list
 
+def cleanup_failed(status_folder):
+    failed_list = glob.glob('{}/*.FAILED'.format(status_folder))
+    count = 0
+    for filename in failed_list:
+        id = int(os.path.basename(filename).split('.')[0])
+        print ("Cleaning up failed job #{}".format(id))
+        os.remove(filename)
+        count+= 1
+    print ("Cleaned up {} failed jobs.".format(count))
+
+
 def main():
     # Parse command line options
     args = parseargs()
@@ -343,7 +361,7 @@ def main():
     print (' Status folder', args.status_folder)
     print (' Log folder', args.log_folder)
     print (' Source filename', args.filename)
-    print (' Target list', args.target_list)
+    print (' Target list', args.target)
     print (' Concurrency max {} min {}'.format(args.concurrency_limit, args.min_concurrency_limit))
     print (' Batch system', ('PBS' if args.pbs else 'None'))
 
@@ -361,6 +379,9 @@ def main():
     status_folder = '{}/{}'.format(args.status_folder, args.sbid)
     log_folder = '{}/{}'.format(args.log_folder, args.sbid)
     prep_folders(status_folder, log_folder)
+
+    if args.retry_failed:
+        cleanup_failed(status_folder)
 
     # Run through the processing
     num_targets = produce_all_cutouts(targets, args.sbid, status_folder, src_beam_map, args.delay, 
