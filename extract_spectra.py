@@ -13,6 +13,7 @@ import math
 import os
 import time
 import warnings
+import zipfile
 
 import astropy.units as u
 from astropy.coordinates import SkyCoord, FK4
@@ -199,7 +200,8 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
     w = WCS(header)
     index = np.arange(header['NAXIS3'])
     velocities = w.wcs_pix2world(10,10,index[:],0,0)[2]
-    radius=math.ceil(max(6, src['a']))
+    print (image.shape)
+    radius=math.ceil(min(max(6, src['a']), (image.shape[-1]-1)//2))
 
     img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
         radius=radius, plot_weight_path=figures_folder)
@@ -428,7 +430,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'has_mw_abs', 'has_other_abs', 
             'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
             dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', None, None, 'float64', 'float64', 'float64', 'float64', None),
+            'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
             meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
@@ -668,7 +670,7 @@ def get_field_centre(sources):
     return field_centre
 
 
-def add_sources(ax, sources,detection, best):
+def add_sources(ax, sources,detection, best, is_mw):
 
     for src in sources:
         colour_name = 'darkgreen'
@@ -676,7 +678,7 @@ def add_sources(ax, sources,detection, best):
         sigma = (1-src['min_opacity'])/src['sd_cont']
     
         marker = '.'
-        if src['has_other_abs']:
+        if src['has_other_abs'] and not (is_mw and src['has_mw_abs']):
             marker = 'o'
             facecolor = 'none'
             colour_name = 'orange'
@@ -714,11 +716,28 @@ def plot_background_map(fig, background):
     wcs = WCS(mom0[0].header)
     ax = fig.add_subplot(111, projection=wcs)
     im = ax.imshow(nh_data, cmap='gist_yarg', vmin=vmin, vmax=vmax, alpha=0.6, norm=norm)
+
+    lon = ax.coords[0]
+    lat = ax.coords[1]
+    #lon.set_ticks(number=12)
+    lon.set_ticks_position('rb')
+    lon.set_ticklabel_position('rb')
+    lon.set_axislabel_position('b')
+
+    #lat.set_ticks(number=12)
+    lat.set_ticks_position('tl')
+    lat.set_ticklabel_position('tl')
+    lat.set_axislabel_position('l')
+
+    # Add axes labels
+    ax.set_xlabel("Right Ascension (hours)", fontsize=16)
+    ax.set_ylabel("Declination (degrees)", fontsize=16)
+
     ax.grid()
     return ax, wcs
 
 
-def plot_source_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0.fits'):
+def plot_source_loc_map(spectra_table, figures_folder, is_mw, background='hi_zea_ms_mom0.fits'):
 
     print('\nPlotting {} source locations over background of {}.'.format(len(spectra_table), background))
 
@@ -734,7 +753,7 @@ def plot_source_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom
 
     # Display the moment map image
     #plt.colorbar(im,fraction=0.046, pad=0.04)
-    add_sources(ax, spectra_table, 3, 5)
+    add_sources(ax, spectra_table, 3, 5, is_mw)
 
     prefix = figures_folder + "/source_loc"
     print ("  Output", prefix+".png")
@@ -806,6 +825,34 @@ def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom):
             filename, title, ranges=ranges, vel_range=vel_ranges)
 
 
+def output_reg_file(filename, sources):
+    with open(filename, 'w') as writer:
+        for src in sources:
+            smaj = src['semi_maj_axis']*u.arcsec.to(u.deg)
+            smin = src['semi_min_axis']*u.arcsec.to(u.deg)
+            shape = 'j2000;ellipse {} {} {} {} {} # text="{}"\n'.format(
+                src['ra'], src['dec'], smaj, smin, src['pa'], src['comp_name'])
+            writer.write(shape)
+
+def export_ds9_regions(spectra_table, parent_folder, detect_field='has_mw_abs'):
+
+    print('\nOutputting DS9 region files.')
+
+    detections = spectra_table[spectra_table[detect_field]]
+    filename = parent_folder+'detections.reg'
+    print (" Outputting {} detections to {}".format(len(detections), filename))
+    output_reg_file(filename, detections)
+
+    non_detections = spectra_table[~spectra_table[detect_field]]
+    filename = parent_folder+'non_detections.reg'
+    print (" Outputting {} non detections to {}".format(len(non_detections), filename))
+    output_reg_file(filename, non_detections)
+
+
+def check_milky_way(selavy_table):
+    loc = SkyCoord(ra=selavy_table['ra_deg_cont'], dec=selavy_table['dec_deg_cont'], frame='icrs')
+    is_mw = np.min(loc.galactic.b.value) > -20
+    return is_mw
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
@@ -838,6 +885,8 @@ def main():
     selavy_table = src_votable.get_first_table().to_table()
     rename_columns(selavy_table)
     continuum_range = (args.continuum_start, args.continuum_end)
+    is_milky_way = check_milky_way(selavy_table)
+    print ('is milky way?', is_milky_way)
 
     if not args.skip_abs:    
         # Extract absorption spectra (including noise and emission)
@@ -862,9 +911,13 @@ def main():
     writeto(abs_vo_table, parent_folder+'askap_absorption.vot')
 
     # Produce consolidated plots
-    plot_source_loc_map(spectra_table, figures_folder)
-    plot_field_loc_map(spectra_table, figures_folder)
+    mom0_file = 'hi_zea_all_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
+    plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
+    plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
     plot_all_spectra(spectra_table, abs_table, spectra_folder, args.no_zoom)
+
+    # DS9 files
+    export_ds9_regions(spectra_table, parent_folder)
 
     # Report
     end = time.time()

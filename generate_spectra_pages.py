@@ -50,6 +50,12 @@ def output_location_plots(f, source_map='figures/source_loc.png'):
     f.write('\n<a href="{}" class="d-block mb-4 h-100"  data-lightbox="maps">'.format(source_map))
     f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="{}" alt="Map of the location of the sources.">'.format(source_map))
     f.write('\n</a>\n</div>')
+    print(os.path.dirname(f.name)+'/figures/long_vel.png')
+    if os.path.exists(os.path.dirname(f.name)+'/figures/long_vel.png'):
+        f.write('\n<div class="col-md-auto">')
+        f.write('\n<a href="figures/long_vel.png" class="d-block mb-4 h-100"  data-lightbox="maps">')
+        f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/long_vel.png" alt="Longitude-velocity plot of the spectra.">')
+        f.write('\n</a>\n</div>')
     f.write('\n</div>')
 
 def output_block_title(f, rating, first, count):
@@ -116,7 +122,8 @@ def output_j19_img(f, gaskap_name, j19_name, rating, sep=None):
     return
 
 
-def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=False, has_mw_abs=False, verbose=False, source_map=None):
+def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=False, has_mw_abs=False, 
+        verbose=False, source_map=None, max_noise=None):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
@@ -128,6 +135,8 @@ def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=F
 
         for rating in 'ABCDEF':
             targets = table[table['rating']==rating]
+            if max_noise:
+                targets = targets[targets['sd_cont'] < max_noise]
             if has_other_abs:
                 targets = targets[targets['has_other_abs'] == 1]
             elif has_mw_abs:
@@ -349,39 +358,30 @@ def main():
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with MW absorption features'.format(
         args.sbid, args.best), '{}/mw_detections.html'.format(parent_folder), has_mw_abs=True)
 
-    output_diff_sigma_spectra(args.sbid, spectra_table, 'Comparison of sigma cutoffs', '{}/sigmacomp.html'.format(parent_folder))
+    max_noise=0.03
+    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with less than {} noise level'.format(
+        args.sbid, max_noise), '{}/quiet.html'.format(parent_folder), max_noise=max_noise)
 
-    missed_sources = ['J005448-725353', 'J010532-721331', 'J005014-730326', 'J012924-733153', 'J005217-730157', 'J010556-714607', 'J005141-725545', 'J004306-732828', 'J010401-720206', 
-        'J010359-720144', 'J010404-720145', 'J013032-731741', 'J003524-732223', 'J010919-725600', 'J013218-715348', 'J004718-723947', 'J010431-720726', 'J005116-734000', 'J003037-742903', 
-        'J003037-742901', 'J012733-713639', 'J010932-713453', 'J003936-742018', 'J004808-741206', 'J002411-735717', 'J002143-741500']
-    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} excluded by changed noise'.format(
-        args.sbid), '{}/excluded.html'.format(parent_folder), missed_sources)
+    if args.sbid == 10944:
+        output_diff_sigma_spectra(args.sbid, spectra_table, 'Comparison of sigma cutoffs', '{}/sigmacomp.html'.format(parent_folder))
 
-    wide_added = ['J012639-731502', 'J012639-731502', 'J005644-725200', 'J011408-732006', 'J005217-730157']
-    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} added by using 3 channels with 2.3 sigma match'.format(
-        args.sbid), '{}/wide.html'.format(parent_folder), wide_added)
+        missed_sources = ['J005448-725353', 'J010532-721331', 'J005014-730326', 'J012924-733153', 'J005217-730157', 'J010556-714607', 'J005141-725545', 'J004306-732828', 'J010401-720206', 
+            'J010359-720144', 'J010404-720145', 'J013032-731741', 'J003524-732223', 'J010919-725600', 'J013218-715348', 'J004718-723947', 'J010431-720726', 'J005116-734000', 'J003037-742903', 
+            'J003037-742901', 'J012733-713639', 'J010932-713453', 'J003936-742018', 'J004808-741206', 'J002411-735717', 'J002143-741500']
+        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} excluded by changed noise'.format(
+            args.sbid), '{}/excluded.html'.format(parent_folder), missed_sources)
 
-    bad_noise =  ['J004047-714600',
-        'J005218-722708',
-        'J005611-710707',
-        'J005732-741243',
-        'J010029-713826',
-        'J011049-731428',
-        'J011050-731426',
-        'J011134-711414',
-        'J011432-732143',
-        'J011815-695147',
-        'J012149-695645',
-        'J012546-731600',
-        'J013031-695115',
-        'J014114-740732']
-    bad_noise = ['J003749-735128',
-        'J010932-713453',
-        'J013134-700042',
-        'J013742-733050',
-        'J014105-722748']
-    output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with poor noise estimates'.format(
-        args.sbid), '{}/bad_noise.html'.format(parent_folder), bad_noise)
+        wide_added = ['J012639-731502', 'J012639-731502', 'J005644-725200', 'J011408-732006', 'J005217-730157']
+        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} added by using 3 channels with 2.3 sigma match'.format(
+            args.sbid), '{}/wide.html'.format(parent_folder), wide_added)
+
+        bad_noise = ['J003749-735128',
+            'J010932-713453',
+            'J013134-700042',
+            'J013742-733050',
+            'J014105-722748']
+        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with poor noise estimates'.format(
+            args.sbid), '{}/bad_noise.html'.format(parent_folder), bad_noise)
 
     if args.sbid in (8906, 10941, 10944):
         j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched = find_j19_matches(spectra_table, no_match_cat='{}/j19_not_matched.vot'.format(parent_folder))
