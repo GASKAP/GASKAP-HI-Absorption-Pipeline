@@ -82,7 +82,7 @@ def parseargs():
                         action='store_true', required=False)
     parser.add_argument("--continuum_start", help="The lowest velocity (in km/s) of the conitnuum region.", type=int, 
                         default=-100, required=False)
-    parser.add_argument("--continuum_end", help="The lowest velocity (in km/s) of the conitnuum region.", type=int, 
+    parser.add_argument("--continuum_end", help="The lowest velocity (in km/s) of the continuum region.", type=int, 
                         default=-60, required=False)
     parser.add_argument("--no_zoom", help="Don't zoom in the combined spectra",
                         action='store_true', required=False)
@@ -201,6 +201,7 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
     index = np.arange(header['NAXIS3'])
     velocities = w.wcs_pix2world(10,10,index[:],0,0)[2]
     print (image.shape)
+    print (continuum_start_vel, continuum_end_vel, velocities[0], velocities[-1])
     radius=math.ceil(min(max(6, src['a']), (image.shape[-1]-1)//2))
 
     img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
@@ -878,7 +879,7 @@ def main():
     file_list = glob.glob(cutout_folder + 'J*_sl.fits')
     file_list.sort()
 
-    targets = read_targets('targets_{}.csv'.format(args.sbid))
+    targets = read_targets('{}/targets_{}.csv'.format(parent_folder, args.sbid))
     
     # Read and filter catalogue
     src_votable = votable.parse(args.catalogue, pedantic=False)

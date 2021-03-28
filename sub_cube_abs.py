@@ -12,22 +12,20 @@ import csv
 import os
 import shutil
 
-def cleanup_prev(sbid,comp_name):
-    image_name='sb{}/{}_sl'.format(sbid, comp_name)
+def cleanup_prev(sbid,comp_name, image_name, fits_name):
+    #image_name='sb{}/{}_sl'.format(sbid, comp_name)
     for suffix in ['image', 'model', 'pb', 'psf', 'residual', 'sumwt']:
         filename = '{}.{}'.format(image_name, suffix)
         if os.path.exists(filename):
             print ('Deleting', filename)
             shutil.rmtree(filename)
-    for suffix in ['fits']:
-        filename = '{}.{}'.format(image_name, suffix)
-        if os.path.exists(filename):
-            print ('Deleting', filename)
-            os.remove(filename)
+    if os.path.exists(fits_name):
+        print ('Deleting', fits_name)
+        os.remove(fits_name)
 
 
 def get_target_params(sbid, sample_id):
-    with open('targets_{}.csv'.format(sbid), 'r') as csvfile:
+    with open('sb{0}/targets_{0}.csv'.format(sbid), 'r') as csvfile:
         tgt_reader = csv.reader(csvfile, delimiter=',',
                                 quotechar='"', quoting=csv.QUOTE_MINIMAL)
         for row in tgt_reader:
@@ -55,38 +53,40 @@ def get_ms_pattern(sbid):
             if int(row[0]) == sbid:
                 #print (row)
                 pattern = row[1]
-                return pattern
+                velocity = row[2]
+                return pattern, velocity
     raise Exception('Unknown sbid={}'.format(sbid))
 
 
 def main():
     sample_id = int(os.environ['SAMPLE_ID'])
     sbid = int(os.environ['SBID'])
-    print ("Processing sbid {} sample {} ".format(sbid, sample_id))
+    chan_width = os.environ['CHAN_WIDTH'] if 'CHAN_WIDTH' in os.environ else '' # e.g. '1km/s'
+    print ("Processing sbid {} sample {}".format(sbid, sample_id))
 
     comp_name, ra, dec, beams = get_target_params(sbid, sample_id)
-    print ("Starting extract of subcube for sbid {} sample {} comp {}".format(sbid, sample_id, comp_name))
+    print ("Starting extract of subcube for sbid {} sample {} comp {} width {}".format(sbid, sample_id, comp_name, chan_width))
     print (comp_name, ra, dec, beams)
     vis = []
-    pattern = get_ms_pattern(sbid)
+    pattern, velocity = get_ms_pattern(sbid)
     for beam in beams:
         num = beam[0:2]
         interleave = beam[2]
         vis_name = pattern.format(interleave, num)
         vis.append(vis_name)
 
-    cleanup_prev(sbid,comp_name)
+    image_name='sb{}/work/{}_sl'.format(sbid, comp_name)
+    fits_name='sb{}/cutouts/{}_sl.fits'.format(sbid, comp_name)
+    cleanup_prev(sbid,comp_name, image_name, fits_name)
 
     print ('Processing input visibilities of ' + str(vis))
-    klambda = '1.6'
-    #klambda = '2.0'
-    image_name='sb{}/{}_sl'.format(sbid, comp_name)
+    klambda = '1.5'
     uvdist='>{}Klambda'.format(klambda)
-    fits_name=image_name + '.fits'
+    start_vel=velocity+'m/s'
     phasecenter='J2000 {}deg {}deg'.format(ra, dec)
     tclean (vis=vis,specmode='cube',imagename=image_name,reffreq='1.42040571183GHz',restfreq='1.42040571183GHz',
-      phasecenter=phasecenter,imsize=50,uvrange=uvdist,weighting='natural',
-      gridder='standard', pbcor=True, width='1km/s', niter=1000, cell='1arcsec',
+      phasecenter=phasecenter,imsize=50,uvrange=uvdist,weighting='natural', start=start_vel,
+      gridder='standard', pbcor=True, width=chan_width, niter=1000, cell='1arcsec', 
       vptable='../ASKAP_AIRY_BP.tab')
     if not os.path.exists(image_name+'.image'):
         print ('ERROR: tclean did not produce an image')

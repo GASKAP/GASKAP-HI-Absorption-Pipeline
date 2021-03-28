@@ -252,7 +252,7 @@ def main():
     spectra_folder = parent_folder + 'spectra/'
     prep_folders([spectra_folder])
 
-    targets = read_targets('targets_{}.csv'.format(args.sbid))
+    targets = read_targets('{}targets_{}.csv'.format(parent_folder, args.sbid))
     
     # Read and filter catalogue
     #src_votable = votable.parse(args.catalogue, pedantic=False)

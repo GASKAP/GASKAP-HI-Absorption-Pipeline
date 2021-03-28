@@ -11,11 +11,14 @@ status_folder="$3"
 export SAMPLE_ID
 export SBID
 
+echo `date` > ${status_folder}/${SAMPLE_ID}.ACTIVE
+
 casa --nologger --log2term -c sub_cube_abs.py
 
 # Mark the job as complete
 retval=$?
 echo "Return value=${retval}"
+rm ${status_folder}/${SAMPLE_ID}.ACTIVE
 if [ $retval -ne 0 ]; then
     echo "Job failed"
     echo `date` > ${status_folder}/${SAMPLE_ID}.FAILED

@@ -146,17 +146,20 @@ def build_map(image_params):
     return src_beam_map
 
 
-def register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs):
-    if not pre_active_jobs:
-        return 0
+def register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs, remaining_array_ids, status_folder):
+    if pre_active_jobs:
+        active_ids.update(pre_active_jobs)
 
-    for array_id in pre_active_jobs:
+    for array_id in remaining_array_ids:
+        if os.path.isfile('{}/{:d}.ACTIVE'.format(status_folder, array_id)):
+            active_ids.add(array_id)
+
+    for array_id in active_ids:
         comp_name = targets[array_id-1]
         tgt_ms = src_beam_map[comp_name]
 
         for ms in tgt_ms:
             active_ms.append(ms)
-        active_ids.add(array_id)
         # print ('+++ ' + str(active_ids))
         print('Registered active job {} (#{}) concurrency {} ms: {}'.format(
             comp_name, array_id, len(active_ids), tgt_ms))
@@ -205,7 +208,7 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
     ids_to_scan = list(remaining_array_ids)
     for array_id in ids_to_scan:
         if array_id in active_ids:
-            print ('{} is active'.format(array_id))
+            #print ('{} is active'.format(array_id))
             continue
 
         comp_name = targets[array_id-1]
@@ -235,10 +238,10 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
             if use_pbs:
                 run_os_cmd(
-                    ('qsub -v COMP_INDEX={0},SBID={2} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
-                     '-e {1}/askap_abs_{0}_e.log ./start_job.sh').format(array_id, log_folder, sbid))
+                    ('qsub -v COMP_INDEX={0},SBID={2},STATUS_DIR={3} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
+                     '-e {1}/askap_abs_{0}_e.log ./start_job.sh').format(array_id, log_folder, sbid, status_folder))
             else:
-                run_os_cmd('./start_job.sh {} {}'.format(array_id, sbid))
+                run_os_cmd('./start_job.sh {} {} "{}"'.format(array_id, sbid, status_folder))
         elif not rate_limited:
             rate_limited = True
             print (' rate limit of {} applied'.format(concurrency_limit))
@@ -259,7 +262,8 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
     total_concurrency = 0
     print('Processing {} targets'.format(len(remaining_array_ids)))
 
-    num_running = register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs)
+    num_running = register_active(targets, src_beam_map, active_ids, active_ms, pre_active_jobs, remaining_array_ids, 
+                                    status_folder)
     total_concurrency += num_running
     i = 0
     while len(remaining_array_ids) > 0 and i < max_loops:
@@ -285,8 +289,8 @@ def produce_all_cutouts(targets, sbid, status_folder, src_beam_map, delay, concu
     return num_targets
     
 
-def prep_folders(status_folder, log_folder):
-    for folder in [status_folder, log_folder]:
+def prep_folders(folders):
+    for folder in folders:
         if not os.path.exists(folder):
             os.makedirs(folder)
             print ("Created " + folder)
@@ -378,7 +382,7 @@ def main():
     
     status_folder = '{}/{}'.format(args.status_folder, args.sbid)
     log_folder = '{}/{}'.format(args.log_folder, args.sbid)
-    prep_folders(status_folder, log_folder)
+    prep_folders([status_folder, log_folder, 'sb{}/work'.format(args.sbid), 'sb{}/cutouts'.format(args.sbid)])
 
     if args.retry_failed:
         cleanup_failed(status_folder)
