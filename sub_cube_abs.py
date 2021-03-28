@@ -14,7 +14,7 @@ import shutil
 
 def cleanup_prev(sbid,comp_name, image_name, fits_name):
     #image_name='sb{}/{}_sl'.format(sbid, comp_name)
-    for suffix in ['image', 'model', 'pb', 'psf', 'residual', 'sumwt']:
+    for suffix in ['image', 'model', 'pb', 'psf', 'residual', 'sumwt', 'mask', 'image.pbcor']:
         filename = '{}.{}'.format(image_name, suffix)
         if os.path.exists(filename):
             print ('Deleting', filename)
