@@ -163,7 +163,11 @@ def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0)
         if not fname in file_list:
             return None
     
-    comp_cat_row= selavy_table[selavy_table['component_name']==target['comp_name']][0]
+    comp_cat_rows = selavy_table[selavy_table['component_name']==target['comp_name']]
+    comp_cat_row = None
+    for row in comp_cat_rows:
+        if comp_cat_row is None or row['flux_peak'] > comp_cat_row['flux_peak']:
+            comp_cat_row = row
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
           'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak']}
