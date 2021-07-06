@@ -430,20 +430,36 @@ def merge_runs(runs_a, runs_b):
             fullset.append(abs_run)
     return fullset
 
-def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, cont_range=(-100,-60)):
+
+def calc_tau(min_optical_depth, sigma_min_od):
+    if min_optical_depth > 0:
+        peak_tau = -1*np.log(min_optical_depth)
+        tau_1_sigma = -1*np.log(min_optical_depth + sigma_min_od)
+        sigma_peak_tau = np.abs(peak_tau - tau_1_sigma)
+        #sigma_peak_tau = np.abs(sigma_min_od / (min_optical_depth))
+    else:
+        # Saturated spectra defaulting to tau=5 TODO: Check
+        peak_tau = 5
+        tau_noise = -1* np.log(sigma_min_od)
+        sigma_peak_tau = np.abs(peak_tau - tau_noise)
+    print ("od={:.3f} +- {:.3f} tau={:.2f} +- {:.2f}".format(
+        min_optical_depth, sigma_min_od, peak_tau, sigma_peak_tau))
+    return peak_tau, sigma_peak_tau
+
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60)):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
-            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'has_mw_abs', 'has_other_abs', 
-            'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
+            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'sigma_tau', 
+            'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
             dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
+            'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
             meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
-            'start_vel', 'end_vel', 'length', 'min_opacity', 'max_sigma'),
+            'start_vel', 'end_vel', 'length', 'min_opacity', 'peak_tau', 'sigma_tau', 'max_sigma'),
             dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'int', 'float64', 'float64'),
+            'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
+            'int', 'float64', 'float64', 'float64', 'float64'),
             meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
 
     print('Assessing {} spectra'.format(len(targets)))
@@ -464,9 +480,17 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         abs_spec = abs_spec_votable.to_table()
 
         opacity = abs_spec['opacity']
-        sigma_opacity = abs_spec['sigma_opacity'] 
-        min_opacity = np.min(opacity)
-        vel_min_opacity = abs_spec['velocity'][np.argmin(opacity)]
+        sigma_opacity = abs_spec['sigma_opacity']
+        if is_milky_way:
+            min_od_chan = np.nanargmin(opacity) 
+        else:
+            start_pos = np.where(abs_spec['velocity'] >= 50*u.km/u.s)[0][0]
+            min_od_chan = np.nanargmin(opacity[start_pos:])+start_pos
+        min_opacity = opacity[min_od_chan]
+        sigma_min_od =  sigma_opacity[min_od_chan]
+        peak_tau, sigma_peak_tau = calc_tau(min_opacity, sigma_min_od)
+
+        vel_min_opacity = abs_spec['velocity'][min_od_chan]/1000
         max_opacity = np.max(opacity)
         num_noise = (opacity > 1+sigma_opacity).sum()
 
@@ -490,15 +514,21 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                     has_mw_abs = True
                 if absrow.start_vel >= 50:
                     has_other_abs = True
+                peak_chan = np.nanargmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length])+absrow.start_idx
+                abs_min_opacity = opacity[peak_chan]
+                abs_sigma_min_od = sigma_opacity[peak_chan]
+                abs_peak_tau, abs_sigma_peak_tau = calc_tau(abs_min_opacity, abs_sigma_min_od)
+
                 abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
                     rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
-                    np.nanmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length]), absrow.max_sigma])
+                    abs_min_opacity, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma])
 
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
                         rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
-                        min_opacity, vel_min_opacity, has_mw_abs, has_other_abs, src['a'], src['b'], src['pa'], 0, poor_noise_flag])
+                        min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
+                        src['b'], src['pa'], 0, poor_noise_flag])
 
     for rating in 'ABCDEF':
         count = np.sum(src_table['rating'] == rating)
@@ -856,7 +886,7 @@ def export_ds9_regions(spectra_table, parent_folder, detect_field='has_mw_abs'):
 
 def check_milky_way(selavy_table):
     loc = SkyCoord(ra=selavy_table['ra_deg_cont'], dec=selavy_table['dec_deg_cont'], frame='icrs')
-    is_mw = np.min(loc.galactic.b.value) > -20
+    is_mw = np.abs(np.min(loc.galactic.b.value)) < 20
     return is_mw
 
 def main():
@@ -902,7 +932,7 @@ def main():
 
     # Assess spectra - rating, consecutive significant channels (flag if mw or other abs)
     spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
-        args.sbid,  cont_range=continuum_range)
+        args.sbid,  is_milky_way, cont_range=continuum_range)
     add_column_density(spectra_table)
 
     # Save spectra catalogue
