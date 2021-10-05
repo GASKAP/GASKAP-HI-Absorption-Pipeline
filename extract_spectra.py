@@ -181,7 +181,8 @@ def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0)
         if not fname in file_list:
             return None
     
-    comp_cat_rows = selavy_table[selavy_table['component_name']==target['comp_name']]
+    key = 'component_name' if 'component_name' in selavy_table.colnames else 'island_name'
+    comp_cat_rows = selavy_table[selavy_table[key]==target['comp_name']]
     comp_cat_row = None
     for row in comp_cat_rows:
         if comp_cat_row is None or row['flux_peak'] > comp_cat_row['flux_peak']:
