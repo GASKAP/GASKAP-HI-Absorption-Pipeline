@@ -134,8 +134,9 @@ def rename_columns(table):
 
 def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, src_pa):
     cube = SpectralCube.read(fname)
-    cube.beam_threshold = 0.13
-    m0 = cube.moment0().to(u.Jy*u.km/(u.beam*u.s))
+    ms_cube = cube.with_spectral_unit(u.m / u.s, velocity_convention='radio')
+    ms_cube.beam_threshold = 1.0 # 0.13 - needed higher for GASKAP src 3, 72
+    m0 = ms_cube.moment0().to(u.Jy*u.km/(u.beam*u.s))
     m0.write('moment-0.fits', overwrite=True)
 
     fig = aplpy.FITSFigure('moment-0.fits')
@@ -198,15 +199,23 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
 
 def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, num_edge_chan=10):
 
-    hdulist = fits.open(fname)
-    image = hdulist[0].data
-    header = hdulist[0].header
-    w = WCS(header)
-    index = np.arange(header['NAXIS3'])
-    velocities = w.wcs_pix2world(10,10,index[:],0,0)[2]
-    print (image.shape)
-    print (continuum_start_vel, continuum_end_vel, velocities[0], velocities[-1])
-    radius=math.ceil(min(max(6, src['a']), (image.shape[-1]-1)//2))
+    #hdulist = fits.open(fname)
+    #image = hdulist[0].data
+    #header = hdulist[0].header
+    #w = WCS(header)
+    #index = np.arange(header['NAXIS3'])
+    #velocities = w.wcs_pix2world(10,10,index[:],0,0)[2]
+    #print (image.shape)
+    #print (continuum_start_vel, continuum_end_vel, velocities[0], velocities[-1])
+    #radius=math.ceil(min(max(6, src['a']), (image.shape[-1]-1)//2))
+
+    cube = SpectralCube.read(fname)
+    ms_cube = cube.with_spectral_unit(u.m / u.s, velocity_convention='radio')
+    velocities = ms_cube.spectral_axis.value
+    radius=math.ceil(min(max(6, src['a']), (ms_cube.shape[-1]-1)//2))
+    w = ms_cube.wcs
+    image = cube.unmasked_data[:,:,:].value#.unmasked_data
+
 
     img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
         radius=radius, plot_weight_path=figures_folder)
