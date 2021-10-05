@@ -471,7 +471,7 @@ def calc_tau(min_optical_depth, sigma_min_od):
 
 def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60)):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
-            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'sigma_tau', 
+            'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
             dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
@@ -479,10 +479,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
-            'start_vel', 'end_vel', 'length', 'min_opacity', 'peak_tau', 'sigma_tau', 'max_sigma'),
+            'start_vel', 'end_vel', 'length', 'min_optical_depth', 'e_min_optical_depth', 'peak_tau', 'e_peak_tau', 'max_sigma'),
             dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
-            'int', 'float64', 'float64', 'float64', 'float64'),
+            'int', 'float64', 'float64', 'float64', 'float64', 'float64'),
             meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
 
     print('Assessing {} spectra'.format(len(targets)))
@@ -545,7 +545,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                 abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
                     rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
-                    abs_min_opacity, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma])
+                    abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma])
 
         
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
@@ -607,6 +607,8 @@ def add_spectra_column_metadata(spectra_vo_table):
     add_col_metadata(spectra_vo_table, 'num_chan_noise', 'The number of channels in the spectrum that have emission above the 1-sigma noise level.')
     add_col_metadata(spectra_vo_table, 'min_opacity', 'The minimum opacity in the spectrum, in opacity units, representing the peak absorption.')
     add_col_metadata(spectra_vo_table, 'vel_min_opacity', 'The velocity at which the peak absorption is found.', units='km/s')
+    add_col_metadata(spectra_vo_table, 'peak_tau', 'The maximum tau value in the spectrum, representing the peak absorption.')
+    add_col_metadata(spectra_vo_table, 'e_peak_tau', 'The uncertainty in tau at the peak absorption velocity.')
     add_col_metadata(spectra_vo_table, 'has_mw_abs', 'Flag to indicate that the spectrum has absorption in the Milky Way velocity range (<50 km/s).', datatype='boolean')
     add_col_metadata(spectra_vo_table, 'has_other_abs', 'Flag to indicate that the spectrum has absorption away from the Milky Way velocity range (>50 km/s).', datatype='boolean')
     add_col_metadata(spectra_vo_table, 'semi_maj_axis', 'HWHM major axis before deconvolution.', units='arcsec', ucd='phys.angSize.smajAxis;em.radio;stat.fit')
@@ -625,10 +627,10 @@ def add_absorption_column_metadata(abs_vo_table):
     add_col_metadata(abs_vo_table, 'rating', 'Quality rating of the absorption spectrum.')
     add_col_metadata(abs_vo_table, 'flux_peak', 'Peak flux density of the background source.', units='mJy/beam', ucd='phot.flux.density;stat.max;em.radio;stat.fit')
     add_col_metadata(abs_vo_table, 'mean_cont', 'Mean continuum level per channel of the spectrum.', units='mJy/beam', ucd='phot.flux.density;stat.mean;em.radio;stat.fit')
-    add_col_metadata(abs_vo_table, 'sd_cont', '1-sigma noise level of the spectrum in opacity units. Does not include emission noise.')
+    add_col_metadata(abs_vo_table, 'sd_cont', '1-sigma noise level of the spectrum in optical depth units. Does not include emission noise.')
     add_col_metadata(abs_vo_table, 'opacity_range', 'The range in the absorption spectrum from highest emission to lowest absorption.')
     add_col_metadata(abs_vo_table, 'max_s_max_n', 'Ratio of maximum absorption versus maximum emission noise in the spectrum.')
-    add_col_metadata(abs_vo_table, 'max_noise', 'The maximum emission noise in the spectrum, in opacity units.')
+    add_col_metadata(abs_vo_table, 'max_noise', 'The maximum emission noise in the spectrum, in optical depth units.')
     add_col_metadata(abs_vo_table, 'num_chan_noise', 'The number of channels in the spectrum that have emission above the 1-sigma noise level.')
     add_col_metadata(abs_vo_table, 'semi_maj_axis', 'HWHM major axis before deconvolution.', units='arcsec', ucd='phys.angSize.smajAxis;em.radio;stat.fit')
     add_col_metadata(abs_vo_table, 'semi_min_axis', 'HWHM minor axis before deconvolution.', units='arcsec', ucd='phys.angSize.sminAxis;em.radio;stat.fit')
@@ -636,7 +638,10 @@ def add_absorption_column_metadata(abs_vo_table):
     add_col_metadata(abs_vo_table, 'start_vel', 'The lowest velocity covered by this absorption feature.', units='km/s', ucd='phys.velocity;stat.min')
     add_col_metadata(abs_vo_table, 'end_vel', 'The highest velocity covered by this absorption feature.', units='km/s', ucd='phys.velocity;stat.max')
     add_col_metadata(abs_vo_table, 'length', 'The number of channels included in this absorption feature.', units='chan')
-    add_col_metadata(abs_vo_table, 'min_opacity', 'The minimum opacity in the feature, in opacity units, representing the peak absorption.')
+    add_col_metadata(abs_vo_table, 'min_optical_depth', 'The minimum optical depth in the feature, in optical depth units, representing the peak absorption.')
+    add_col_metadata(abs_vo_table, 'e_min_optical_depth', 'The uncertainty in the optical depth at the peak absorption velocity.')
+    add_col_metadata(abs_vo_table, 'peak_tau', 'The maximum tau value in the feature, representing the peak absorption.')
+    add_col_metadata(abs_vo_table, 'e_peak_tau', 'The uncertainty in tau at the peak absorption velocity.')
     add_col_metadata(abs_vo_table, 'max_sigma', 'The maximum significance of the absorption feature, representing the peak absorption.', ucd='stat.snr')
 
 
