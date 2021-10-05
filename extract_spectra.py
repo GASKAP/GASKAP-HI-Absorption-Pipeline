@@ -203,11 +203,11 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     :param longitude: The galactic longitude of the target object
     :param latitude: The galactic latitude of the target object
     """
-    table = Table(meta={'name': filename, 'id': 'opacity'})
+    table = Table(meta={'name': filename, 'id': 'optical_depth'})
     table.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
-    table.add_column(Column(name='opacity', data=opacity, description='Absorption as exp(-tau)'))
+    table.add_column(Column(name='optical_depth', data=opacity, description='Absorption as exp(-tau)'))
     table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
-    table.add_column(Column(name='sigma_opacity', data=sigma_tau, description='Noise in the absorption profile, relative to exp(-tau)'))
+    table.add_column(Column(name='sigma_od', data=sigma_tau, description='Noise in the absorption profile, relative to exp(-tau)'))
     table.add_column(Column(name='em_mean', data=em_mean, unit='K', description='Mean brightness temperature around the source'))
     table.add_column(Column(name='em_std', data=em_std, unit='K', description='Noise level in the brightness temperature'))
 
@@ -877,7 +877,7 @@ def output_emission_spectra(spectra_table, spectra_folder):
         title = 'Source #{} {}'.format(source['id'], comp_name)
         filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
         plot_combined_spectrum(velocities/1000, tb_mean, tb_std, 
-            abs_spec['velocity']/1000, abs_spec['opacity'], abs_spec['sigma_opacity'], 
+            abs_spec['velocity']/1000, abs_spec['optical_depth'], abs_spec['sigma_od'], 
             filename, title)
 
 
