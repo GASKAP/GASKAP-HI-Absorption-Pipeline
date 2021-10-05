@@ -403,9 +403,13 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
 
         # Read the primary beam emission spectrum
         filename = '{0}/{1}_pb_emission.vot'.format(spectra_folder, comp_name)
-        emission_votable = votable.parse(filename, pedantic=False)
-        emission_tab = emission_votable.get_first_table().to_table()
-        pb_em_mean, pb_em_std = match_emission_to_absorption(emission_tab['pb_em_mean'], emission_tab['pb_em_std'], emission_tab['velocity'], spectrum.velocity)
+        if os.path.exists(filename):
+            emission_votable = votable.parse(filename, pedantic=False)
+            emission_tab = emission_votable.get_first_table().to_table()
+            pb_em_mean, pb_em_std = match_emission_to_absorption(emission_tab['pb_em_mean'], emission_tab['pb_em_std'], emission_tab['velocity'], spectrum.velocity)
+        else:
+            pb_em_mean = np.zeros(spectrum.velocity.shape)
+            pb_em_std = np.zeros(spectrum.velocity.shape)
 
         # Calculate the noise envelope
         sigma_opacity = calc_sigma_tau(sd_cont, pb_em_mean, opacity)
