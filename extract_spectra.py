@@ -86,6 +86,9 @@ def parseargs():
                         default=-60, required=False)
     parser.add_argument("--no_zoom", help="Don't zoom in the combined spectra",
                         action='store_true', required=False)
+    parser.add_argument("--weighting", help="The weighting scheme to use.", type=str, 
+                        choices=['square', 'linear', 'none'], 
+                        default='square', required=False)
 
     args = parser.parse_args()
     return args
@@ -211,7 +214,7 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     writeto(votable, filename)
 
 
-def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, num_edge_chan=10):
+def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, weighting, num_edge_chan=10):
 
     #hdulist = fits.open(fname)
     #image = hdulist[0].data
@@ -232,7 +235,7 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
 
 
     img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
-        radius=radius, plot_weight_path=figures_folder)
+        radius=radius, plot_weight_path=figures_folder, weighting=weighting)
 
     l_edge, r_edge = cube_tools.find_edges(img_slice, num_edge_chan)
 
@@ -243,8 +246,11 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
         names='plane,velocity,flux')
 
     del image
-    del header
-    hdulist.close()
+    del ms_cube
+    del cube
+
+    #del header
+    #hdulist.close()
 
     return spectrum_array
 
@@ -359,7 +365,8 @@ def check_noise(opacity, sigma_opacity):
     return (clipped_ratio > 1) & (max_sn < 10)
 
 
-def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, max_spectra = 5000, cont_range=(-100,-60)):
+def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, weighting, 
+                        max_spectra = 5000, cont_range=(-100,-60)):
     print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
@@ -384,7 +391,7 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
         #continuum_end_vel = -60*u.km.to(u.m)
         continuum_start_vel = cont_range[0]*u.km.to(u.m)
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
-        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder)
+        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
         
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
@@ -958,7 +965,7 @@ def main():
     if not args.skip_abs:    
         # Extract absorption spectra (including noise and emission)
         spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
-            args.sbid, cont_range=continuum_range)
+            args.sbid, args.weighting, cont_range=continuum_range)
     else:
         print ("**Skipping spectra extraction - reusing existing spectra")
 
