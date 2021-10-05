@@ -32,8 +32,8 @@ def parseargs():
                                      description="Produce emission spectra for a set of sources")
     parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
                         type=int, required=True)
-    #parser.add_argument("-c", "--catalogue", help="The catalgoue of source positions and characteristics",
-    #                    required=True)
+    parser.add_argument("-c", "--catalogue", help="The catalgoue of source positions and characteristics",
+                        required=False)
     parser.add_argument("-e", "--emission_folder", help="The folder in which GASS ZEA data can be found.",
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
@@ -73,6 +73,17 @@ def read_targets(targets_file):
     table.add_column(Column(name='ra', data=ras))
     table.add_column(Column(name='dec', data=decs))
     table.add_column(Column(name='beams', data=beams))
+
+    return table
+
+
+def extract_targets(selavy_table):
+    table = Table()
+    table.add_column(Column(name='id', data=range(len(selavy_table))))
+    table.add_column(Column(name='comp_name', data=selavy_table['component_name']))
+    table.add_column(Column(name='ra', data=selavy_table['ra_deg_cont']))
+    table.add_column(Column(name='dec', data=selavy_table['dec_deg_cont']))
+    #table.add_column(Column(name='beams', data=beams))
 
     return table
 
@@ -137,7 +148,7 @@ def extract_emission_around_source(slab, pos, radius_outer, radius_inner):
     
     #print (sub_specx)
     # Compute the mean over all spectra
-    tb_mean = np.nanmean(sub_specx, axis=0)
+    tb_mean = np.nanmedian(sub_specx, axis=0)
     # Estimate the uncertainty per channel via the standard deviation over all spectra
     tb_std = np.nanstd(sub_specx, axis=0)
     #print ('mean=',tb_mean)
@@ -252,12 +263,14 @@ def main():
     spectra_folder = parent_folder + 'spectra/'
     prep_folders([spectra_folder])
 
-    targets = read_targets('{}targets_{}.csv'.format(parent_folder, args.sbid))
-    
-    # Read and filter catalogue
-    #src_votable = votable.parse(args.catalogue, pedantic=False)
-    #selavy_table = src_votable.get_first_table().to_table()
-    #rename_columns(selavy_table)
+    targets_fname = '{}/targets_{}.csv'.format(parent_folder, args.sbid)
+    if os.path.exists(targets_fname):
+        targets = read_targets(targets_fname)
+    else:
+        src_votable = votable.parse(args.catalogue, pedantic=False)
+        selavy_table = src_votable.get_first_table().to_table()
+        rename_columns(selavy_table)
+        targets = extract_targets(selavy_table)
 
     gass_files = glob.glob(args.emission_folder + '/gass_*.zea.fits')
     gass_files = sorted(gass_files)
