@@ -126,6 +126,20 @@ def read_targets(targets_file):
     return table
 
 
+def extract_targets(selavy_table):
+    table = Table()
+    table.add_column(Column(name='id', data=range(len(selavy_table))))
+    if 'component_name' in selavy_table.colnames:
+        table.add_column(Column(name='comp_name', data=selavy_table['component_name']))
+    else:
+        table.add_column(Column(name='comp_name', data=selavy_table['island_name']))
+    table.add_column(Column(name='ra', data=selavy_table['ra_deg_cont']))
+    table.add_column(Column(name='dec', data=selavy_table['dec_deg_cont']))
+    #table.add_column(Column(name='beams', data=beams))
+
+    return table
+
+
 def rename_columns(table):
     names = np.asarray(table.colnames)
     for name in names:
@@ -921,8 +935,6 @@ def main():
 
     file_list = glob.glob(cutout_folder + 'J*_sl.fits')
     file_list.sort()
-
-    targets = read_targets('{}/targets_{}.csv'.format(parent_folder, args.sbid))
     
     # Read and filter catalogue
     src_votable = votable.parse(args.catalogue, pedantic=False)
@@ -931,6 +943,12 @@ def main():
     continuum_range = (args.continuum_start, args.continuum_end)
     is_milky_way = check_milky_way(selavy_table)
     print ('is milky way?', is_milky_way)
+
+    targets_fname = '{}/targets_{}.csv'.format(parent_folder, args.sbid)
+    if os.path.exists(targets_fname):
+        targets = read_targets(targets_fname)
+    else:
+        targets = extract_targets(selavy_table)
 
     if not args.skip_abs:    
         # Extract absorption spectra (including noise and emission)
