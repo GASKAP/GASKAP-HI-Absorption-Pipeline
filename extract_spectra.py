@@ -16,6 +16,7 @@ import warnings
 import zipfile
 
 import astropy.units as u
+from astropy.convolution import convolve
 from astropy.coordinates import SkyCoord, FK4
 from astropy.io import fits, votable
 from astropy.io.ascii import Csv
@@ -89,6 +90,9 @@ def parseargs():
     parser.add_argument("--weighting", help="The weighting scheme to use.", type=str, 
                         choices=['square', 'linear', 'none'], 
                         default='square', required=False)
+    parser.add_argument("--smooth", help="Use the smoothed spectrum for detections",
+                        action='store_true', required=False)
+            
 
     args = parser.parse_args()
     return args
@@ -193,7 +197,7 @@ def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0)
     return src
 
 def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename, 
-                   sigma_tau):
+                   sigma_tau, smoothed_od, sigma_smoothed_od, metadata=None):
     """
     Write the spectrum (velocity, flux and opacity) to a votable format file.
 
@@ -204,12 +208,16 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     :param latitude: The galactic latitude of the target object
     """
     table = Table(meta={'name': filename, 'id': 'optical_depth'})
+    if metadata is not None:
+        table.meta.update(metadata)
     table.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
     table.add_column(Column(name='optical_depth', data=opacity, description='Absorption as exp(-tau)'))
     table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
     table.add_column(Column(name='sigma_od', data=sigma_tau, description='Noise in the absorption profile, relative to exp(-tau)'))
     table.add_column(Column(name='em_mean', data=em_mean, unit='K', description='Mean brightness temperature around the source'))
     table.add_column(Column(name='em_std', data=em_std, unit='K', description='Noise level in the brightness temperature'))
+    table.add_column(Column(name='smoothed_od', data=smoothed_od, description='Absorption as exp(-tau) smoothed using a 5 point Hanning window'))
+    table.add_column(Column(name='sigma_smoothed_od', data=sigma_smoothed_od, description='1-sigma noise level in the absorption profile, relative to exp(-tau)'))
 
     votable = from_table(table)
     writeto(votable, filename)
@@ -266,17 +274,22 @@ def highlight_features(ax, ranges):
             ax.fill_betweenx(ylim, rng[0], rng[1], color=colors[color_idx], alpha=0.2, zorder=-1)
 
 
-def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_opacity, filename, title, vel_range=None, ranges=None):
+def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_optical_depth, filename, title, vel_range=None, 
+                            ranges=None, smoothed_od=None, sigma_smoothed_od=None):
     fig, axs = plt.subplots(2, 1, figsize=(8, 10))
     
     axs[0].set_title(title, fontsize=16)
 
     axs[0].axhline(1, color='r')
-    axs[0].plot(velocity, opacity, zorder=4, lw=1)
-    axs[0].fill_between(velocity, 1-sigma_opacity, 1+sigma_opacity, color='grey', alpha=0.4, zorder=1)
-    axs[0].plot(velocity, 1-(3*sigma_opacity), zorder=1, lw=1, ls=":")
+    axs[0].plot(velocity, opacity, zorder=4, lw=0.5)
+    axs[0].fill_between(velocity, 1-sigma_optical_depth, 1+sigma_optical_depth, color='grey', alpha=0.4, zorder=1)
+    axs[0].plot(velocity, 1-(3*sigma_optical_depth), zorder=1, lw=1, ls=":")
     axs[0].set_ylabel(r'$e^{(-\tau)}$')
     axs[0].grid(True)
+    if smoothed_od is not None:
+        axs[0].plot(velocity, opacity, zorder=5, lw=0.5)
+        axs[0].fill_between(velocity, 1-sigma_optical_depth, 1+sigma_optical_depth, color='lightblue', alpha=0.4, zorder=2)
+
     highlight_features(axs[0], ranges)
 
     axs[1].plot(velocity, em_mean, color='firebrick', zorder=4)
@@ -296,12 +309,13 @@ def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_opacity, fi
     plt.close()
     return
 
-def output_spectrum(spec_folder, spectrum_array, opacity, sigma_opacity, em_mean, em_std, comp_name, src_id, continuum_start_vel, continuum_end_vel):
+def output_spectrum(spec_folder, spectrum_array, opacity, sigma_optical_depth, smoothed_od, sigma_smoothed_od, 
+                    em_mean, em_std, comp_name, src_id, continuum_start_vel, continuum_end_vel):
     filename = '{}/{}_spec'.format(spec_folder, comp_name)
 
-    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, em_mean, em_std, filename+'.vot', sigma_opacity)
-    spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_opacity, range=None)
-    spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'_zoom.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_opacity, range=(75,275))
+    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, em_mean, em_std, filename+'.vot', sigma_optical_depth, smoothed_od, sigma_smoothed_od)
+    spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_optical_depth, range=None)
+    spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'_zoom.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_optical_depth, range=(-150,50))
 
 
 def match_emission_to_absorption(em_mean, em_std, em_velocity, abs_velocity):
@@ -341,25 +355,25 @@ def calc_sigma_tau(cont_sd, em_mean, opacity):
     return sigma_tau
 
 
-def check_noise(opacity, sigma_opacity):
+def check_noise(opacity, sigma_optical_depth):
     """
     Check if the noise estimate of the spectrum is poor. A poor estimate will have a higher standard deviation than the
     noise estimate even when any potential absoprtion is clipped out. Only low (less than 10) signal to noise spectrum will be flagged as 
     having poor noise.
 
     :param opacity: The optical depth spectrum
-    :param sigma_opacity: The noise lecel at each velocity step
+    :param sigma_optical_depth: The noise lecel at each velocity step
     :return true if the noise estimate is poor, false if it is good
     """
 
     opacity_ar = np.asarray(opacity)
-    noise = np.array(sigma_opacity)
+    noise = np.array(sigma_optical_depth)
 
     signal_to_noise = (1-opacity_ar) / noise
     max_sn = np.max(signal_to_noise)
 
     clipped = np.array(opacity_ar, copy=True)
-    clipped[clipped<1-sigma_opacity] = 1
+    clipped[clipped<1-sigma_optical_depth] = 1
     clipped_mean = np.mean(clipped)
     clipped_std = np.std(clipped)
     clipped_ratio = clipped_std/np.min(noise)
@@ -399,7 +413,7 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
         
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
-        sigma_opacity = sd_cont*np.ones(spectrum.velocity.shape)
+        sigma_optical_depth = sd_cont*np.ones(spectrum.velocity.shape)
 
         # Read the primary beam emission spectrum
         filename = '{0}/{1}_pb_emission.vot'.format(spectra_folder, comp_name)
@@ -411,8 +425,14 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
             pb_em_mean = np.zeros(spectrum.velocity.shape)
             pb_em_std = np.zeros(spectrum.velocity.shape)
 
+        # Smooth the spectrum
+        hann_kernel = np.hanning(5)
+        hann_smoothed = convolve(opacity*u.m/u.s, hann_kernel)
+        _, sd_cont_smooth = spectrum_tools.get_mean_continuum(spectrum.velocity, hann_smoothed, continuum_start_vel, continuum_end_vel)
+
         # Calculate the noise envelope
-        sigma_opacity = calc_sigma_tau(sd_cont, pb_em_mean, opacity)
+        sigma_optical_depth = calc_sigma_tau(sd_cont, pb_em_mean, opacity)
+        sigma_optical_depth_smooth = calc_sigma_tau(sd_cont_smooth, pb_em_mean, opacity)
 
         # Read the emission spectrum
         filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
@@ -423,21 +443,22 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
         else:
             em_mean = em_std = np.zeros(spectrum.velocity.shape)
 
-        output_spectrum(spectra_folder, spectrum, opacity, sigma_opacity, em_mean, em_std, comp_name, tgt['id'], continuum_start_vel, continuum_end_vel)
+        output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
+            sigma_optical_depth_smooth, em_mean, em_std, comp_name, tgt['id'], continuum_start_vel, continuum_end_vel)
 
     return None
 
 
-def find_runs(spec_table, min_sigma=3, min_len=2):
+def find_runs(spec_table, optical_depth, sigma_optical_depth, min_sigma=3, min_len=2):
     runs = []
     curr_idx = 0
     single_min_sigma = min_sigma[0] if isinstance(min_sigma, list) else min_sigma
     run_min_sigma = min_sigma[1] if isinstance(min_sigma, list) else min_sigma
 
-    single_sigma_filter = 1-spec_table['opacity'] > single_min_sigma*spec_table['sigma_opacity']
-    run_sigma_filter = 1-spec_table['opacity'] > run_min_sigma*spec_table['sigma_opacity']
-    sigma = (1-spec_table['opacity']) / spec_table['sigma_opacity']
-    #sigma3 = 1-spec_table['opacity'] > min_sigma*spec_table['sigma_opacity']
+    single_sigma_filter = 1-optical_depth > single_min_sigma*sigma_optical_depth
+    run_sigma_filter = 1-optical_depth > run_min_sigma*sigma_optical_depth
+    sigma = (1-optical_depth) / sigma_optical_depth
+    #sigma3 = 1-optical_depth > min_sigma*sigma_optical_depth
     for bit, group in itertools.groupby(run_sigma_filter):
         result = list(group)
         length = sum(result)
@@ -484,7 +505,8 @@ def calc_tau(min_optical_depth, sigma_min_od):
         min_optical_depth, sigma_min_od, peak_tau, sigma_peak_tau))
     return peak_tau, sigma_peak_tau
 
-def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60)):
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60),
+                    use_smoothed=False):
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
@@ -521,20 +543,20 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         abs_spec_votable = parse_single_table(abs_spec_filename)
         abs_spec = abs_spec_votable.to_table()
 
-        opacity = abs_spec['opacity']
-        sigma_opacity = abs_spec['sigma_opacity']
+        optical_depth = abs_spec['smoothed_od'] if use_smoothed else abs_spec['optical_depth']
+        sigma_optical_depth = abs_spec['sigma_smoothed_od'] if use_smoothed else abs_spec['sigma_od']
         if is_milky_way:
-            min_od_chan = np.nanargmin(opacity) 
+            min_od_chan = np.nanargmin(optical_depth) 
         else:
             start_pos = np.where(abs_spec['velocity'] >= 50*u.km/u.s)[0][0]
-            min_od_chan = np.nanargmin(opacity[start_pos:])+start_pos
-        min_opacity = opacity[min_od_chan]
-        sigma_min_od =  sigma_opacity[min_od_chan]
+            min_od_chan = np.nanargmin(optical_depth[start_pos:])+start_pos
+        min_opacity = optical_depth[min_od_chan]
+        sigma_min_od =  sigma_optical_depth[min_od_chan]
         peak_tau, sigma_peak_tau = calc_tau(min_opacity, sigma_min_od)
 
         vel_min_opacity = abs_spec['velocity'][min_od_chan]/1000
-        max_opacity = np.max(opacity)
-        num_noise = (opacity > 1+sigma_opacity).sum()
+        max_opacity = np.max(optical_depth)
+        num_noise = (optical_depth > 1+sigma_optical_depth).sum()
 
         #continuum_start_vel = -100*u.km.to(u.m)
         #continuum_end_vel = -60*u.km.to(u.m)
@@ -542,13 +564,13 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
-        poor_noise_flag = check_noise(opacity, sigma_opacity)
+        poor_noise_flag = check_noise(optical_depth, sigma_optical_depth)
 
-        rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(opacity, np.mean(sigma_opacity))
+        rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(optical_depth, np.mean(sigma_optical_depth))
 
         has_mw_abs = False
         has_other_abs = False
-        runs = find_runs(abs_spec, min_sigma=[3, 2.8], min_len=2)
+        runs = find_runs(abs_spec, optical_depth, sigma_optical_depth, min_sigma=[3, 2.8], min_len=3) # was 2 for HI
         if (len(runs) > 0):
             for idx, absrow in enumerate(runs):
                 abs_name = '{}_{}'.format(tgt['comp_name'], int(absrow.start_vel))
@@ -556,9 +578,9 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                     has_mw_abs = True
                 if absrow.start_vel >= 50:
                     has_other_abs = True
-                peak_chan = np.nanargmin(opacity[absrow.start_idx:absrow.start_idx+absrow.length])+absrow.start_idx
-                abs_min_opacity = opacity[peak_chan]
-                abs_sigma_min_od = sigma_opacity[peak_chan]
+                peak_chan = np.nanargmin(optical_depth[absrow.start_idx:absrow.start_idx+absrow.length])+absrow.start_idx
+                abs_min_opacity = optical_depth[peak_chan]
+                abs_sigma_min_od = sigma_optical_depth[peak_chan]
                 abs_peak_tau, abs_sigma_peak_tau = calc_tau(abs_min_opacity, abs_sigma_min_od)
 
                 abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
@@ -577,9 +599,9 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         print ("  Rating {}: {:.0f} sources".format(rating, count))
 
     hits = np.sum(src_table['has_mw_abs'])
-    print ("  Has MW absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(targets)))
+    print ("  Has MW absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
     hits = np.sum(src_table['has_other_abs'])
-    print ("  Has other absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(targets)))
+    print ("  Has other absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
     print ("  Found {} absorption instances".format(len(abs_table)))
 
     return src_table, abs_table
@@ -885,7 +907,10 @@ def output_emission_spectra(spectra_table, spectra_folder):
             filename, title)
 
 
-def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom):
+def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom, use_smoothed):
+
+    print('\nPlotting spectra to {}.'.format(spectra_folder))
+
     for idx, source in enumerate(spectra_table):
         comp_name = source['comp_name']
 
@@ -902,9 +927,15 @@ def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom):
 
         title = 'Source #{} {}'.format(source['id'], comp_name)
         filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
-        plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
-            abs_spec['opacity'], abs_spec['sigma_opacity'], 
-            filename, title, ranges=ranges, vel_range=vel_ranges)
+        if use_smoothed:
+            plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
+                abs_spec['smoothed_od'], abs_spec['sigma_smoothed_od'], 
+                filename, title, ranges=ranges, vel_range=vel_ranges) #, smoothed_od=abs_spec['smoothed_od'], 
+                #sigma_smoothed_od=abs_spec['sigma_smoothed_od'])
+        else:
+            plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
+                abs_spec['optical_depth'], abs_spec['sigma_od'], 
+                filename, title, ranges=ranges, vel_range=vel_ranges)
 
 
 def output_reg_file(filename, sources):
@@ -983,7 +1014,7 @@ def main():
 
     # Assess spectra - rating, consecutive significant channels (flag if mw or other abs)
     spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
-        args.sbid,  is_milky_way, cont_range=continuum_range)
+        args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
     add_column_density(spectra_table)
 
     # Save spectra catalogue
@@ -1000,7 +1031,7 @@ def main():
     mom0_file = 'hi_zea_all_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
     plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
     plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
-    plot_all_spectra(spectra_table, abs_table, spectra_folder, args.no_zoom)
+    plot_all_spectra(spectra_table, abs_table, spectra_folder, args.no_zoom, args.smooth)
 
     # DS9 files
     export_ds9_regions(spectra_table, parent_folder)
