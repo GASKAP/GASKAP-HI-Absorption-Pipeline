@@ -373,7 +373,10 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
     i = 0
     for tgt in targets:
         comp_name = tgt['comp_name']
-        src = get_source(file_list, tgt, selavy_table, folder=cutouts_folder, scaling_factor=0.8)
+        #if comp_name not in ['J163451-473658', 'J163439-473604']:
+        #    continue
+
+        src = get_source(file_list, tgt, selavy_table, folder=cutouts_folder, scaling_factor=1.0) # TODO
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], comp_name))
             continue
@@ -498,6 +501,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
     i = 0
     for tgt in targets:
         comp_name = tgt['comp_name']
+
+        #if comp_name not in ['J163451-473658', 'J163439-473604']:
+        #    continue
+
         src = get_source(file_list, tgt, selavy_table, scaling_factor=0.8)
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
@@ -887,7 +894,7 @@ def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom):
         start_vel = tgt_abs['start_vel'].data
         end_vel = tgt_abs['end_vel'].data
         ranges = np.stack((start_vel,end_vel), axis=-1)
-        vel_ranges = None if no_zoom else (75,350)
+        vel_ranges = None if no_zoom else (-150,50) #(75,350)
 
         title = 'Source #{} {}'.format(source['id'], comp_name)
         filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
