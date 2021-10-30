@@ -17,7 +17,7 @@ import zipfile
 
 import astropy.units as u
 from astropy.convolution import convolve
-from astropy.coordinates import SkyCoord, FK4
+from astropy.coordinates import SkyCoord, FK5
 from astropy.io import fits, votable
 from astropy.io.ascii import Csv
 from astropy.io.votable.tree import Param,Info
@@ -193,7 +193,8 @@ def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0)
             comp_cat_row = row
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
-          'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak']}
+          'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak'],
+           'flux_int': comp_cat_row['flux_int']}
     return src
 
 def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename, 
@@ -507,12 +508,16 @@ def calc_tau(min_optical_depth, sigma_min_od):
 
 def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60),
                     use_smoothed=False):
-    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
+
+    date_str = time.strftime('%Y-%m-%d', time.localtime())
+
+    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
+            'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
-            dtype=('int', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            dtype=('int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
-            meta={'name': 'ASKAP Spectra for sbid {}'.format(sbid)})
+            meta={'name': 'ASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
@@ -588,9 +593,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
                     abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma])
 
+        src_pos = SkyCoord( src['ra']*u.deg, src['dec']*u.deg, frame=FK5)
         
-        src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, 
-                        rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
+        src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
+                        rating, src['flux_peak']*u.Jy, src['flux_int']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                         min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
                         src['b'], src['pa'], 0, poor_noise_flag])
 
@@ -769,7 +775,7 @@ def get_field_centre(sources):
     height = max_dec-min_dec
     centre_ra = min_ra + width/2
     centre_dec = min_dec + height/2
-    field_centre = SkyCoord(ra=centre_ra*u.deg, dec=centre_dec*u.deg, frame=FK4)
+    field_centre = SkyCoord(ra=centre_ra*u.deg, dec=centre_dec*u.deg, frame=FK5)
     print (field_centre)
     return field_centre
 
@@ -1005,7 +1011,7 @@ def main():
     else:
         targets = extract_targets(selavy_table)
 
-    if not args.skip_abs:    
+    if not args.skip_abs:
         # Extract absorption spectra (including noise and emission)
         spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
             args.sbid, args.weighting, cont_range=continuum_range)
