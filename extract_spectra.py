@@ -92,6 +92,12 @@ def parseargs():
                         default='square', required=False)
     parser.add_argument("--smooth", help="Use the smoothed spectrum for detections",
                         action='store_true', required=False)
+    parser.add_argument("--island_groups", help="Extract one spectrum for each island based on its components",
+                        action='store_true', required=False)
+    parser.add_argument("--island_cat", "--island_catalogue", help="The catalgoue of island positions and characteristics",
+                        required=False)
+    parser.add_argument("--source_scaling", help="The ratio by which source ellipses will be scaled when extracting spectra", type=float,
+                        default=1.0, required=False)
             
 
     args = parser.parse_args()
@@ -140,6 +146,8 @@ def extract_targets(selavy_table):
         table.add_column(Column(name='comp_name', data=selavy_table['component_name']))
     else:
         table.add_column(Column(name='comp_name', data=selavy_table['island_name']))
+    if 'island_id' in selavy_table.colnames:
+        table.add_column(Column(name='island_id', data=selavy_table['island_id']))
     table.add_column(Column(name='ra', data=selavy_table['ra_deg_cont']))
     table.add_column(Column(name='dec', data=selavy_table['dec_deg_cont']))
     #table.add_column(Column(name='beams', data=beams))
@@ -153,7 +161,7 @@ def rename_columns(table):
         if name.startswith('col_'):
             table.rename_column(name, name[4:])
 
-def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, src_pa):
+def plot_mom0(fname, comp_name, out_folder, sources):
     cube = SpectralCube.read(fname)
     ms_cube = cube.with_spectral_unit(u.m / u.s, velocity_convention='radio')
     ms_cube.beam_threshold = 1.0 # 0.13 - needed higher for GASKAP src 3, 72
@@ -168,32 +176,36 @@ def plot_mom0(fname, comp_name, out_folder, src_ra, src_dec, src_maj, src_min, s
     fig.set_theme('publication')
 
     # Plot ellipse for each source
-    a_deg = src_maj*u.arcsec.to(u.deg)*2
-    b_deg = src_min*u.arcsec.to(u.deg)*2
-    fig.show_ellipses(src_ra, src_dec, a_deg, b_deg, angle=src_pa-90, edgecolor='red') #, 
+    for src in sources:
+        print (src)
+        a_deg = src['a']*u.arcsec.to(u.deg)*2
+        b_deg = src['b']*u.arcsec.to(u.deg)*2
+        # src['ra'], src['dec'],                 src['a'], src['a'], src['pa']
+        fig.show_ellipses(src['ra'], src['dec'], a_deg, b_deg, angle=src['pa']-90, edgecolor='red') #, 
 
     figname = '{}/{}_mom0'.format(out_folder, comp_name)
     #fig.savefig(figname+'.pdf')
     fig.savefig(figname+'.png')
     fig.close()
 
-def get_source(file_list, target, selavy_table, folder=None, scaling_factor=1.0):
+def get_source(file_list, target_name, comp_name, selavy_table, folder=None, scaling_factor=1.0):
     
     fname = ''
     if folder:
-        fname = '{}{}_sl.fits'.format(folder, target['comp_name'])
+        fname = '{}{}_sl.fits'.format(folder, target_name)
         if not fname in file_list:
             return None
     
     key = 'component_name' if 'component_name' in selavy_table.colnames else 'island_name'
-    comp_cat_rows = selavy_table[selavy_table[key]==target['comp_name']]
+    comp_cat_rows = selavy_table[selavy_table[key]==comp_name]
+    print ("Found {} rows for comp_name {} and key {}".format(len(comp_cat_rows), comp_name, key))
     comp_cat_row = None
     for row in comp_cat_rows:
         if comp_cat_row is None or row['flux_peak'] > comp_cat_row['flux_peak']:
             comp_cat_row = row
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
-          'comp_name': target['comp_name'], 'fname': fname, 'flux_peak': comp_cat_row['flux_peak'],
+          'comp_name': comp_name, 'fname': fname, 'flux_peak': comp_cat_row['flux_peak'],
            'flux_int': comp_cat_row['flux_int']}
     return src
 
@@ -224,7 +236,8 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     writeto(votable, filename)
 
 
-def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, weighting, num_edge_chan=10):
+def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures_folder, weighting, num_edge_chan=10,
+target_name=None):
 
     #hdulist = fits.open(fname)
     #image = hdulist[0].data
@@ -239,13 +252,13 @@ def extract_spectrum(fname, src, continuum_start_vel, continuum_end_vel, figures
     cube = SpectralCube.read(fname)
     ms_cube = cube.with_spectral_unit(u.m / u.s, velocity_convention='radio')
     velocities = ms_cube.spectral_axis.value
-    radius=math.ceil(min(max(6, src['a']), (ms_cube.shape[-1]-1)//2))
+    #radius=math.ceil(min(max(6, src['a']), (ms_cube.shape[-1]-1)//2))
     w = ms_cube.wcs
     image = cube.unmasked_data[:,:,:].value#.unmasked_data
 
 
     img_slice = cube_tools.get_integrated_spectrum(image, w, src, velocities, continuum_start_vel, continuum_end_vel, 
-        radius=radius, plot_weight_path=figures_folder, weighting=weighting)
+        plot_weight_path=figures_folder, weighting=weighting, target_name=target_name)
 
     l_edge, r_edge = cube_tools.find_edges(img_slice, num_edge_chan)
 
@@ -381,37 +394,7 @@ def check_noise(opacity, sigma_optical_depth):
     return (clipped_ratio > 1) & (max_sn < 10)
 
 
-def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder,spectra_folder, sbid, weighting, 
-                        max_spectra = 5000, cont_range=(-100,-60)):
-    print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
-
-    i = 0
-    for tgt in targets:
-        comp_name = tgt['comp_name']
-        #if comp_name not in ['J163451-473658', 'J163439-473604']:
-        #    continue
-
-        src = get_source(file_list, tgt, selavy_table, folder=cutouts_folder, scaling_factor=1.0) # TODO
-        if not src:
-            print('Skipping missing src #{} {}'.format(tgt['id'], comp_name))
-            continue
-        i+=1
-        if i > max_spectra:
-            print ("Reaching maximum spectra for this run")
-            break
-            
-        print('\nExtracting spectrum for src #{} {} maj:{} min:{} pa:{:.3f}'.format(tgt['id'], comp_name, src['a'], src['b'], src['pa']))
-
-        plot_mom0(src['fname'], comp_name, figures_folder, src['ra'], src['dec'], 
-                src['a'], src['b'], src['pa'])
-        
-        # Extract the spectrum
-        #continuum_start_vel = -100*u.km.to(u.m)
-        #continuum_end_vel = -60*u.km.to(u.m)
-        continuum_start_vel = cont_range[0]*u.km.to(u.m)
-        continuum_end_vel = cont_range[1]*u.km.to(u.m)
-        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
-        
+def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel):
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
         sigma_optical_depth = sd_cont*np.ones(spectrum.velocity.shape)
@@ -445,7 +428,95 @@ def extract_all_spectra(targets, file_list, cutouts_folder, selavy_table, figure
             em_mean = em_std = np.zeros(spectrum.velocity.shape)
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
-            sigma_optical_depth_smooth, em_mean, em_std, comp_name, tgt['id'], continuum_start_vel, continuum_end_vel)
+            sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel)
+
+
+def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder, spectra_folder, sbid, weighting, 
+                        source_scaling, max_spectra = 5000, cont_range=(-100,-60)):
+    print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
+
+    i = 0
+    for tgt in targets:
+        comp_name = tgt['comp_name']
+        #if comp_name not in ['J163451-473658', 'J163439-473604']:
+        #    continue
+        print (tgt)
+
+        src = get_source(file_list, comp_name, comp_name, selavy_table, folder=cutouts_folder, scaling_factor=source_scaling) 
+        if not src:
+            print('Skipping missing src #{} {}'.format(tgt['id'], comp_name))
+            continue
+        i+=1
+        if i > max_spectra:
+            print ("Reaching maximum spectra for this run")
+            break
+            
+        print('\nExtracting spectrum for src #{} {} maj:{} min:{} pa:{:.3f}'.format(tgt['id'], comp_name, src['a'], src['b'], src['pa']))
+
+        plot_mom0(src['fname'], comp_name, figures_folder, [src])
+        # src['ra'], src['dec'],                 src['a'], src['b'], src['pa']
+        
+        # Extract the spectrum
+        #continuum_start_vel = -100*u.km.to(u.m)
+        #continuum_end_vel = -60*u.km.to(u.m)
+        continuum_start_vel = cont_range[0]*u.km.to(u.m)
+        continuum_end_vel = cont_range[1]*u.km.to(u.m)
+        spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
+        
+        process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
+
+    return None
+
+
+def extract_all_island_spectra(targets, file_list, cutouts_folder, selavy_table, island_table, figures_folder, 
+                        spectra_folder, sbid, weighting, source_scaling, max_spectra = 5000, cont_range=(-100,-60)):
+    print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
+
+    continuum_start_vel = cont_range[0]*u.km.to(u.m)
+    continuum_end_vel = cont_range[1]*u.km.to(u.m)
+
+    # build map of islands
+    island_map = dict()
+    for comp in targets:
+        island = comp['island_id']
+        comp_list = island_map[island] if island in island_map else []
+        comp_list.append(comp)
+        if island not in island_map:
+            island_map[island] = comp_list
+
+    i = 0
+    for island in sorted(island_map.keys()):
+        comp_list = island_map[island]
+        island_row = island_table[island_table['island_id'] == island][0]
+        island_name = island_row['island_name']
+
+        # Build list of component ellipses
+        sources = []
+        for comp in comp_list:
+            comp_name = comp['comp_name']
+            print ("Processing component {} of island {}".format(comp_name, island_name))
+            src = get_source(file_list, island_name, comp_name, selavy_table, folder=cutouts_folder, scaling_factor=source_scaling)
+            if not src:
+                print('Skipping src #{} {} which as data for island {} is missing.'.format(comp['id'], comp_name, island_name))
+            else:
+                sources.append(src)
+        if len(sources) == 0:
+            continue
+        i+=1
+        if i > max_spectra:
+            print ("Reaching maximum spectra for this run")
+            break
+            
+        print('\nExtracting spectrum for island {} with {} components'.format(island_name, len(sources)))
+
+        plot_mom0(src['fname'], comp_name, figures_folder, sources)
+        
+        # Extract the spectrum
+        spectrum = extract_spectrum(src['fname'], sources, continuum_start_vel, continuum_end_vel, figures_folder, 
+            weighting, target_name=island_name)
+        
+        # src here is only used for the id so we use the first component
+        process_spectrum(spectrum, comp_list[0], spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
 
     return None
 
@@ -531,12 +602,13 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
     i = 0
     for tgt in targets:
+        # TODO: Update to reflect island grouping
         comp_name = tgt['comp_name']
 
         #if comp_name not in ['J163451-473658', 'J163439-473604']:
         #    continue
-
-        src = get_source(file_list, tgt, selavy_table, scaling_factor=0.8)
+        # TODO: first param should be island name when using island grouping
+        src = get_source(file_list, comp_name, comp_name, selavy_table, scaling_factor=1.0)
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
             continue
@@ -973,6 +1045,26 @@ def check_milky_way(selavy_table):
     is_mw = np.abs(np.min(loc.galactic.b.value)) < 20
     return is_mw
 
+
+def log_config(args, cutout_folder, figures_folder, spectra_folder):
+    print ('Configuration:')
+    print (' {: >20} : {}'.format('sbid', args.sbid))
+    print (' {: >20} : {}'.format('catalogue', args.catalogue))
+    print (' {: >20} : {}'.format('parent', args.parent))
+    print (' {: >20} : {}'.format('skip_abs', args.skip_abs))
+    print (' {: >20} : {}'.format('continuum_start', args.continuum_start))
+    print (' {: >20} : {}'.format('continuum_end', args.continuum_end))
+    print (' {: >20} : {}'.format('no_zoom', args.no_zoom))
+    print (' {: >20} : {}'.format('weighting', args.weighting))
+    print (' {: >20} : {}'.format('smooth', args.smooth))
+    print (' {: >20} : {}'.format('island_groups', args.island_groups))
+    print (' {: >20} : {}'.format('island_cat', args.island_cat))
+    print (' {: >20} : {}'.format('source_scaling', args.source_scaling))
+    print (' {: >20} : {}'.format('cutout_folder', cutout_folder))
+    print (' {: >20} : {}'.format('figures_folder', figures_folder))
+    print (' {: >20} : {}'.format('spectra_folder', spectra_folder))
+
+
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
 
@@ -992,6 +1084,7 @@ def main():
     cutout_folder = parent_folder + 'cutouts/'
     figures_folder = parent_folder + 'figures/'
     spectra_folder = parent_folder + 'spectra/'
+    log_config(args, cutout_folder, figures_folder, spectra_folder)
     prep_folders([spectra_folder, figures_folder])
 
     file_list = glob.glob(cutout_folder + 'J*_sl.fits')
@@ -1005,22 +1098,39 @@ def main():
     is_milky_way = check_milky_way(selavy_table)
     print ('is milky way?', is_milky_way)
 
+    if args.island_groups:
+        island_table = votable.parse_single_table(args.island_cat, pedantic=False).to_table()
+        rename_columns(island_table)
+
     targets_fname = '{}/targets_{}.csv'.format(parent_folder, args.sbid)
     if os.path.exists(targets_fname):
         targets = read_targets(targets_fname)
+    #elif args.island_groups:
+    #    targets = extract_targets(island_table)
     else:
         targets = extract_targets(selavy_table)
 
     if not args.skip_abs:
         # Extract absorption spectra (including noise and emission)
-        spectra = extract_all_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
-            args.sbid, args.weighting, cont_range=continuum_range)
+        if args.island_groups:
+            spectra = extract_all_island_spectra(targets, file_list, cutout_folder, selavy_table, island_table, 
+                figures_folder, spectra_folder, args.sbid, args.weighting, args.source_scaling, 
+                cont_range=continuum_range)
+        else:
+            spectra = extract_all_component_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
+                args.sbid, args.weighting, args.source_scaling, cont_range=continuum_range)
     else:
         print ("**Skipping spectra extraction - reusing existing spectra")
 
+
     # Assess spectra - rating, consecutive significant channels (flag if mw or other abs)
-    spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
-        args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
+    if args.island_groups:
+        targets = extract_targets(island_table)
+        spectra_table, abs_table = assess_spectra(targets, file_list, island_table, figures_folder, spectra_folder, 
+            args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
+    else:
+        spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
+            args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
     add_column_density(spectra_table)
 
     # Save spectra catalogue
