@@ -6,6 +6,7 @@
 SAMPLE_ID="$1"
 SBID="$2"
 status_folder="$3"
+SCRIPT_DIR=`dirname "$0"`
 
 # Run the cutout script in CASA
 export SAMPLE_ID
@@ -13,7 +14,7 @@ export SBID
 
 echo `date` > ${status_folder}/${SAMPLE_ID}.ACTIVE
 
-casa --nologger --log2term -c sub_cube_abs.py
+casa --nologger --log2term -c "${SCRIPT_DIR}/sub_cube_abs.py"
 
 # Mark the job as complete
 retval=$?
