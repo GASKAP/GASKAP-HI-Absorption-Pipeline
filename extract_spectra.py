@@ -199,6 +199,9 @@ def get_source(file_list, target_name, comp_name, selavy_table, folder=None, sca
     key = 'component_name' if 'component_name' in selavy_table.colnames else 'island_name'
     comp_cat_rows = selavy_table[selavy_table[key]==comp_name]
     print ("Found {} rows for comp_name {} and key {}".format(len(comp_cat_rows), comp_name, key))
+    if len(comp_cat_rows) == 0:
+        return None
+
     comp_cat_row = None
     for row in comp_cat_rows:
         if comp_cat_row is None or row['flux_peak'] > comp_cat_row['flux_peak']:
@@ -577,7 +580,23 @@ def calc_tau(min_optical_depth, sigma_min_od):
         min_optical_depth, sigma_min_od, peak_tau, sigma_peak_tau))
     return peak_tau, sigma_peak_tau
 
-def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, cont_range=(-100,-60),
+def calc_tau_ew(optical_depth, sigma_od, velocity_res):
+    """
+    Calculate the equivalent width for a feature. This is the sum of the tau values of the feature. For any saturated 
+    optical depth measurements we use the noise level as the optical depth level. Thus the equivalent width is a minimum 
+    value.
+    """
+    # Get a set of optical depth values that are safe to use for tau calcs
+    corr_od = np.array(sigma_od)
+    saturated = optical_depth <= 0
+    corr_od[~saturated] = optical_depth[~saturated]
+
+    ew = np.sum(-1*np.log(corr_od))*velocity_res
+    e_ew = np.sqrt(np.sum((-1*np.log(1-sigma_od))**2))*velocity_res
+    return ew, e_ew
+
+
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, source_scaling, cont_range=(-100,-60),
                     use_smoothed=False):
 
     date_str = time.strftime('%Y-%m-%d', time.localtime())
@@ -592,10 +611,11 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
-            'start_vel', 'end_vel', 'length', 'min_optical_depth', 'e_min_optical_depth', 'peak_tau', 'e_peak_tau', 'max_sigma'),
+            'start_vel', 'end_vel', 'length', 'min_optical_depth', 'e_min_optical_depth', 'peak_tau', 'e_peak_tau', 
+            'max_sigma', 'ew', 'e_ew'),
             dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
-            'int', 'float64', 'float64', 'float64', 'float64', 'float64'),
+            'int', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
             meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
 
     print('Assessing {} spectra'.format(len(targets)))
@@ -608,10 +628,11 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         #if comp_name not in ['J163451-473658', 'J163439-473604']:
         #    continue
         # TODO: first param should be island name when using island grouping
-        src = get_source(file_list, comp_name, comp_name, selavy_table, scaling_factor=1.0)
+        src = get_source(file_list, comp_name, comp_name, selavy_table, scaling_factor=source_scaling)
         if not src:
             print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
             continue
+        #print(src)
 
         abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
         if not os.path.exists(abs_spec_filename):
@@ -620,8 +641,8 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         abs_spec_votable = parse_single_table(abs_spec_filename)
         abs_spec = abs_spec_votable.to_table()
 
-        optical_depth = abs_spec['smoothed_od'] if use_smoothed else abs_spec['optical_depth']
-        sigma_optical_depth = abs_spec['sigma_smoothed_od'] if use_smoothed else abs_spec['sigma_od']
+        optical_depth = abs_spec['smoothed_od'] if use_smoothed else abs_spec['optical_depth'] if 'optical_depth' in abs_spec.colnames else abs_spec['opacity']
+        sigma_optical_depth = abs_spec['sigma_smoothed_od'] if use_smoothed else abs_spec['sigma_od'] if 'sigma_od' in abs_spec.colnames else abs_spec['sigma_opacity']
         if is_milky_way:
             min_od_chan = np.nanargmin(optical_depth) 
         else:
@@ -635,11 +656,12 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         max_opacity = np.max(optical_depth)
         num_noise = (optical_depth > 1+sigma_optical_depth).sum()
 
-        #continuum_start_vel = -100*u.km.to(u.m)
-        #continuum_end_vel = -60*u.km.to(u.m)
+        velocity_res = np.abs(abs_spec['velocity'][1]-abs_spec['velocity'][0])*(u.m/u.s).to(u.km/u.s)
+
         continuum_start_vel = cont_range[0]*u.km.to(u.m)
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
+        #print (mean_cont, sd_cont, abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
         poor_noise_flag = check_noise(optical_depth, sigma_optical_depth)
 
@@ -647,7 +669,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         has_mw_abs = False
         has_other_abs = False
-        runs = find_runs(abs_spec, optical_depth, sigma_optical_depth, min_sigma=[3, 2.8], min_len=3) # was 2 for HI
+        runs = find_runs(abs_spec, optical_depth, sigma_optical_depth, min_sigma=[3, 2.8], min_len=2) # was 2 for HI or 3 for OH
         if (len(runs) > 0):
             for idx, absrow in enumerate(runs):
                 abs_name = '{}_{}'.format(tgt['comp_name'], int(absrow.start_vel))
@@ -655,15 +677,18 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                     has_mw_abs = True
                 if absrow.start_vel >= 50:
                     has_other_abs = True
-                peak_chan = np.nanargmin(optical_depth[absrow.start_idx:absrow.start_idx+absrow.length])+absrow.start_idx
+                feature_optical_depth = optical_depth[absrow.start_idx:absrow.start_idx+absrow.length]
+                feature_sigma_od = sigma_optical_depth[absrow.start_idx:absrow.start_idx+absrow.length]
+                peak_chan = np.nanargmin(feature_optical_depth)+absrow.start_idx
                 abs_min_opacity = optical_depth[peak_chan]
                 abs_sigma_min_od = sigma_optical_depth[peak_chan]
                 abs_peak_tau, abs_sigma_peak_tau = calc_tau(abs_min_opacity, abs_sigma_min_od)
+                ew, e_ew = calc_tau_ew(feature_optical_depth, feature_sigma_od, velocity_res)
 
                 abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
                     rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
-                    abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma])
+                    abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma, ew, e_ew])
 
         src_pos = SkyCoord( src['ra']*u.deg, src['dec']*u.deg, frame=FK5)
         
@@ -762,6 +787,8 @@ def add_absorption_column_metadata(abs_vo_table):
     add_col_metadata(abs_vo_table, 'peak_tau', 'The maximum tau value in the feature, representing the peak absorption.')
     add_col_metadata(abs_vo_table, 'e_peak_tau', 'The uncertainty in tau at the peak absorption velocity.')
     add_col_metadata(abs_vo_table, 'max_sigma', 'The maximum significance of the absorption feature, representing the peak absorption.', ucd='stat.snr')
+    add_col_metadata(abs_vo_table, 'ew', 'The integral of absorption (tau) across the feature.', units='km/s', ucd='spect.line.eqWidth;em.radio')
+    add_col_metadata(abs_vo_table, 'e_ew', 'The uncertainty in the integral of absorption (tau) across the feature.', units='km/s', ucd='stat.error;spect.line.eqWidth;em.radio')
 
 
 def prep_folders(folders):
@@ -943,6 +970,48 @@ def plot_source_loc_map(spectra_table, figures_folder, is_mw, background='hi_zea
     fig.savefig(prefix + ".pdf", bbox_inches='tight')
 
 
+def plot_source_noise_map(spectra_table, figures_folder, is_mw, trimmed, background='hi_zea_ms_mom0.fits', name='source_loc'):
+
+    print('\nPlotting {} source locations over background of {}.'.format(len(spectra_table), background))
+
+    fig = plt.figure(figsize=(12, 9))
+
+    ax, wcs = plot_background_map(fig, background) #, lon_tick_labels='b', fontsize=16)
+
+    field_centre = get_field_centre(spectra_table)
+    try:
+        recenter(ax, wcs, field_centre.ra.value, field_centre.dec.value, width=8.25, height=7.25)  # degrees
+    except Exception as ex:
+        print(ex)
+        return
+
+    x = np.asarray(spectra_table['ra'])
+    y = np.asarray(spectra_table['dec'])
+    c = np.asarray(spectra_table['sd_cont'])*100
+    norm=mcolors.LogNorm(vmin=0.1, vmax=100)
+    m = np.full(x.shape, 'o')
+    det_key = 'has_mw_abs' if is_mw else 'has_other_abs'
+    det = spectra_table[det_key]
+
+    #print (x.shape, y.shape, c.shape, m.shape)
+    sc = ax.scatter(x[trimmed], y[trimmed], transform=ax.get_transform('world'), cmap='plasma',
+               marker='v', edgecolor=None, c=c[trimmed], alpha=0.65, norm=norm, zorder=2, s=70)
+    sc = ax.scatter(x[~det & ~trimmed], y[~det & ~trimmed], transform=ax.get_transform('world'), cmap='plasma',
+               marker='o', edgecolor='white', c=c[~det & ~trimmed], alpha=0.65, norm=norm, zorder=2, s=90)
+    sc = ax.scatter(x[det & ~trimmed], y[det & ~trimmed], transform=ax.get_transform('world'), cmap='plasma',
+               marker='s', edgecolor='black', c=c[det & ~trimmed], alpha=0.7, norm=norm, zorder=3, s=110)
+
+    cbar = fig.colorbar(sc)
+    cbar.set_label("Optical Depth Noise (percent)", fontsize=12)#, loc='right')
+    cbar.set_alpha(1)
+    cbar.draw_all()
+
+    prefix = figures_folder + "/" + name
+    print ("  Output", prefix+".png")
+    fig.savefig(prefix + ".png", bbox_inches='tight')
+    fig.savefig(prefix + ".pdf", bbox_inches='tight')
+
+
 def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0.fits'):
 
     print('\nPlotting field locations over background of {}.'.format(background))
@@ -985,9 +1054,9 @@ def output_emission_spectra(spectra_table, spectra_folder):
             filename, title)
 
 
-def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom, use_smoothed):
+def plot_all_spectra(spectra_table, abs_table, spectra_folder, figures_folder, no_zoom, use_smoothed, is_milky_way):
 
-    print('\nPlotting spectra to {}.'.format(spectra_folder))
+    print('\nPlotting {} spectra to {}.'.format(len(spectra_table), figures_folder))
 
     for idx, source in enumerate(spectra_table):
         comp_name = source['comp_name']
@@ -1001,18 +1070,20 @@ def plot_all_spectra(spectra_table, abs_table, spectra_folder, no_zoom, use_smoo
         start_vel = tgt_abs['start_vel'].data
         end_vel = tgt_abs['end_vel'].data
         ranges = np.stack((start_vel,end_vel), axis=-1)
-        vel_ranges = None if no_zoom else (-150,50) #(75,350)
+        vel_ranges = None if no_zoom else (-150,50) if is_milky_way else (75,350) 
 
         title = 'Source #{} {}'.format(source['id'], comp_name)
-        filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
+        filename = '{}/{}_combined.png'.format(figures_folder, comp_name)
         if use_smoothed:
             plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
                 abs_spec['smoothed_od'], abs_spec['sigma_smoothed_od'], 
                 filename, title, ranges=ranges, vel_range=vel_ranges) #, smoothed_od=abs_spec['smoothed_od'], 
                 #sigma_smoothed_od=abs_spec['sigma_smoothed_od'])
         else:
+            optical_depth = abs_spec['optical_depth'] if 'optical_depth' in abs_spec.colnames else abs_spec['opacity']
+            sigma_optical_depth = abs_spec['sigma_od'] if 'sigma_od' in abs_spec.colnames else abs_spec['sigma_opacity']
             plot_combined_spectrum(abs_velocity/1000, abs_spec['em_mean'], abs_spec['em_std'], 
-                abs_spec['optical_depth'], abs_spec['sigma_od'], 
+                optical_depth, sigma_optical_depth, 
                 filename, title, ranges=ranges, vel_range=vel_ranges)
 
 
@@ -1063,6 +1134,7 @@ def log_config(args, cutout_folder, figures_folder, spectra_folder):
     print (' {: >20} : {}'.format('cutout_folder', cutout_folder))
     print (' {: >20} : {}'.format('figures_folder', figures_folder))
     print (' {: >20} : {}'.format('spectra_folder', spectra_folder))
+    print ('')
 
 
 def main():
@@ -1127,10 +1199,10 @@ def main():
     if args.island_groups:
         targets = extract_targets(island_table)
         spectra_table, abs_table = assess_spectra(targets, file_list, island_table, figures_folder, spectra_folder, 
-            args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
+            args.sbid,  is_milky_way, args.source_scaling, cont_range=continuum_range, use_smoothed=args.smooth)
     else:
         spectra_table, abs_table = assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, 
-            args.sbid,  is_milky_way, cont_range=continuum_range, use_smoothed=args.smooth)
+            args.sbid,  is_milky_way, args.source_scaling, cont_range=continuum_range, use_smoothed=args.smooth)
     add_column_density(spectra_table)
 
     # Save spectra catalogue
@@ -1145,9 +1217,11 @@ def main():
 
     # Produce consolidated plots
     mom0_file = 'hi_zea_all_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
-    plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
+    #plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
+    plot_source_noise_map(spectra_table, figures_folder, is_milky_way, spectra_table['sd_cont'] > 0.3, 
+        background=mom0_file)
     plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
-    plot_all_spectra(spectra_table, abs_table, spectra_folder, args.no_zoom, args.smooth)
+    plot_all_spectra(spectra_table, abs_table, spectra_folder, figures_folder, args.no_zoom, args.smooth, is_milky_way)
 
     # DS9 files
     export_ds9_regions(spectra_table, parent_folder)

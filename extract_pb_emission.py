@@ -261,11 +261,17 @@ def main():
 
     figures_folder = parent_folder + 'figures/'
     spectra_folder = parent_folder + 'spectra/'
-    prep_folders([spectra_folder])
+    prep_folders([spectra_folder, figures_folder])
 
     targets_fname = '{}/targets_{}.csv'.format(parent_folder, args.sbid)
     if os.path.exists(targets_fname):
         targets = read_targets(targets_fname)
+    elif args.catalogue is None:
+        print("Error: Could not find {} and no catalogue was provided.".format(targets_fname))
+        return 1
+    elif not os.path.exists(args.catalogue):
+        print("Error: Could not find catalogue {} .".format(args.catalogue))
+        return 1
     else:
         src_votable = votable.parse(args.catalogue, pedantic=False)
         selavy_table = src_votable.get_first_table().to_table()
