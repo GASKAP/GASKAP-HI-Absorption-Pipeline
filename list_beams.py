@@ -27,7 +27,7 @@ file_list.sort()
 beam_listing = 'sb{0}/beam_listing_SB{0}.csv'.format(sbid)
 
 with open(beam_listing, 'w') as outfile:
-        for beam_file_name in file_list:
+    for beam_file_name in file_list:
 		print (beam_file_name)
                 res = vishead( vis=beam_file_name, mode='list',listitems=['field', 'ptcs'])
                 for i in range(0,3):

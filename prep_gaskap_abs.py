@@ -7,7 +7,6 @@
 
 import argparse
 import csv
-import datetime
 import difflib
 import glob
 import math
@@ -17,6 +16,7 @@ import subprocess
 import sys
 import time
 import warnings
+from pathlib import Path
 
 from astropy.coordinates import SkyCoord
 from astropy.io import ascii, votable
@@ -49,7 +49,6 @@ def parseargs():
                         type=str, required=True)
     parser.add_argument("-p", "--ms_pat", help="The pattern to be used to match the folders of the measurement sets top be used.",
                         type=str, default='*.ms')
-
 
 
     parser.add_argument("--output_folder", help="The output folder which will contain the job configuration files",
@@ -131,6 +130,21 @@ def get_beams_near_src(target_loc, beam_locs, beams, max_sep = 0.8*(1*u.deg)):
 
 
 def find_mismatches(file_list):
+    """
+    Scan a list of file names and build a list of regions of the file names (including paths) that are not the same 
+    for all files.
+    
+    Parameters
+    ----------
+    file_list: list(str)
+        The list of the file paths to be compared
+    
+    Returns
+    -------
+    Array of regions in the paths that do not match, each region will be a pair of positions representing the start and 
+    end+1 of the range.
+    """
+    # Scan the list of files and record the positions where each file name differs from the previous file
     mismatches=set()
     prev_value = None
     for file_path in file_list:
@@ -140,8 +154,8 @@ def find_mismatches(file_list):
                 if opcode[0] != 'equal':
                     mismatches.add((opcode[1], opcode[2]))
         prev_value = file_path
-    #print (sorted(mismatches))
 
+    # Identify the unique regions of difference, storing each region once only and ignoring contained sub-regions
     unique_mismatches = []
     for i, region in enumerate(sorted(mismatches)):
         contained = False
@@ -158,36 +172,37 @@ def find_mismatches(file_list):
 
 
 def build_ms_pattern(ms_loc, ms_pat):
-    #file_list = glob.glob(ms_loc + '/**/*.ms', recursive=True)
+    """
+    Build up a single pattern for filenames of the beam measurement sets with placeholders for the
+    beam number and interleave.
+    """
+    # Create a list the names of the measurement set files
     search_path = '{}/*/{}'.format(ms_loc, ms_pat)
     print ("Find measurement sets matching", search_path)
-
     file_list = glob.glob(search_path)
-    #print (file_list)
+    if len(file_list) == 0:
+        search_path = '{}/{}'.format(ms_loc, ms_pat)
+        print ("Find measurement sets matching", search_path)
+        file_list = glob.glob(search_path)
+
+    # Find which parts of the file names vary between files
     mismatches=find_mismatches(file_list)
 
+    # Idenitfy if the mismatches are for the beam number or interleave name 
+    # and build up definitions of the varying regions
     regions = []
-    prev_beam = None
-    for i,j in sorted(mismatches):
-        start = i
-        end = j
+    for start,end in sorted(mismatches):
         if start==end:
             continue
-        if file_list[0][i:j].isnumeric():
-            #if not prev_beam is None and prev_beam[1] == i:
-            #    start = prev_beam[0]
-            #    regions.pop()
-            #elif not prev_beam is None and prev_beam[0] <= i and prev_beam[1] >= j:
-            #    # This region is contained in the previous one - ignore
-            #    continue
-            print("beam {} to {} is {}".format(start, end, file_list[0][i:j]))
-            prev_beam = (i,j)
+        if file_list[0][start:end].isnumeric():
+            print("beam {} to {} is {}".format(start, end, file_list[0][start:end]))
             regions.append(("{1}", start, end))
         else:
-            print("interleave {} to {} is {}".format(i, j, file_list[0][i:j]))
-            regions.append(("{0}", i, j))
+            print("interleave {} to {} is {}".format(start, end, file_list[0][start:end]))
+            regions.append(("{0}", start, end))
     regions.reverse()
 
+    # Build a pattern for the measurement sets by replacing the varying regions in a sample path with placeholders
     pattern = str(file_list[0])
     for region in regions:
         pattern = pattern[0:region[1]]+region[0]+pattern[region[2]:]
@@ -196,10 +211,14 @@ def build_ms_pattern(ms_loc, ms_pat):
 
 def record_data_loc(sbid, ms_pat, data_loc_fname):
     index = None
-    data_loc = ascii.read(data_loc_fname, guess=False, delimiter=',')    
-    for idx, row in enumerate(data_loc):
-        if str(row['sbid']) == str(sbid):
-            index = idx
+    if os.path.exists(data_loc_fname):
+        data_loc = ascii.read(data_loc_fname, guess=False, delimiter=',')    
+        for idx, row in enumerate(data_loc):
+            if str(row['sbid']) == str(sbid):
+                index = idx
+    else:
+        data_loc = Table(names=('sbid','pattern'), dtype=('i4', 'S500'))
+        #data_loc.add_column()
     
     data_loc_new = Table(data_loc)
     all_pat = data_loc['pattern'].data.tolist()
@@ -209,7 +228,8 @@ def record_data_loc(sbid, ms_pat, data_loc_fname):
     else:
         all_pat[index] = ms_pat
     data_loc_new['pattern'] = Column(data=all_pat, name='pattern')
-    shutil.copyfile(data_loc_fname, data_loc_fname+'.bak')
+    if os.path.exists(data_loc_fname):
+        shutil.copyfile(data_loc_fname, data_loc_fname+'.bak')
     ascii.write(data_loc_new, output=data_loc_fname, format='csv', overwrite=True)
     print ("Recorded ms pattern of sbid {} as {}".format(sbid, ms_pat))
     
@@ -237,7 +257,10 @@ def get_target_list(catalogue, flux_peak_min=15):
 
 
 def generate_beam_listing(sb_folder, sbid):
-    run_os_cmd('./list_beams.sh {}'.format(sbid))
+    me = Path(__file__)
+    script = Path(me.parent, 'list_beams.sh')
+
+    run_os_cmd('{} {}'.format(script, sbid))
     beam_listing = '{0}/beam_listing_SB{1}.csv'.format(sb_folder, sbid)
     return beam_listing
 
