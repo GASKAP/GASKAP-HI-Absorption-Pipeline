@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/236953753.svg)](https://zenodo.org/badge/latestdoi/236953753)
+
 # GASKAP HI Absorption Pipeline
 Pipeline to produce HI absorption spectra from calibrated ASKAP visibilities for the GASKAP project.
 
