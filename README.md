@@ -34,11 +34,11 @@ It will monitor the progress of jobs, record which ones have succeeded and faile
 
 A typical processing run will use the following steps
 
-1. Run (as a job) `prep_gaskap_abs.py` supplying the sbid, the continuum catalogue and the folder containing the measurement sets  (will take ~1 min).
+1. Run (as a job) `prep_gaskap_abs.py` supplying the sbid, the continuum catalogue and the folder containing the measurement sets (will take ~1 min).
 1. Start the cutout daemon `askap_cutout_daemon.py` this may run for a 2-7 days depending on demand, number of sources, compute power and max allowed processes.
-1. Produce emission spectra using `extract_emission.py` and input an emission cube and Selavy catalgoue
-1. Produce primary beam emission spectra using `extract_pb_emission.py` and input GASS data and the Selavy catalgoue
-1. Produce absorption spectra and catalogues using `extract_spectra.py` with the cutouts, emission spectra and primary beam emission spectra produced above and the input Selavy catalgoue
+1. Produce emission spectra using `extract_emission.py` and input an emission cube and Selavy catalogue
+1. Produce primary beam emission spectra using `extract_pb_emission.py` and input GASS data and the Selavy catalogue
+1. Produce absorption spectra and catalogues using `extract_spectra.py` with the cutouts, emission spectra and primary beam emission spectra produced above and the input Selavy catalogue
 1. Create preview web pages using `generate_spectra_pages.py`
 
 ## Dependencies
