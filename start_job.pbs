@@ -3,16 +3,23 @@
 #PBS -N ASKAP_Abs_Cutout
 #PBS -l select=1:ncpus=3:mem=40g
 #PBS -l place=vscatter
-#PBS -l walltime=10:00:00
+#PBS -l walltime=40:00:00
 ##### Queue #####
 #PBS -q smallmem
 ##### Mail Options #####
 # Send an email at job start, end and if aborted
 #PBS -m a
-##### Change to your working directory #####
-cd /avatar/jdempsey/abs_cutouts
 
 date
+
+# If running under PBS, switch to the working directory of the daemon
+if [ -n "${PBS_O_WORKDIR}" ]; then
+    cd "${PBS_O_WORKDIR}";
+fi
+pwd
+
+#  Show list of CPUs you ran on, if you're running under PBS
+if [ -n "$PBS_NODEFILE" ]; then cat $PBS_NODEFILE; fi
 
 # If not run in PBS, get the array id as the first param
 if [ -z "${COMP_INDEX}" ]; then COMP_INDEX=${1}; fi
@@ -23,8 +30,12 @@ if [ -z "${SBID}" ]; then SBID=${2}; fi
 # If not run in PBS, get the default status_dir
 if [ -z "${STATUS_DIR}" ]; then STATUS_DIR="status/${SBID}"; fi
 
+# If not run in PBS, set the script_dir to match where this script is. 
+# In PBS this will be a temporary location so we use the supplied value
+if [ -z "${SCRIPT_DIR}" ]; then SCRIPT_DIR=`dirname "$0"`; fi
+
 #  Show list of CPUs you ran on, if you're running under PBS
 if [ -n "$PBS_NODEFILE" ]; then cat $PBS_NODEFILE; fi
 
 ##### Execute Program #####
-bash ./make_askap_abs_cutout.sh ${COMP_INDEX} ${SBID} "${STATUS_DIR}"
+bash ${SCRIPT_DIR}/make_askap_abs_cutout.sh ${COMP_INDEX} ${SBID} "${STATUS_DIR}"

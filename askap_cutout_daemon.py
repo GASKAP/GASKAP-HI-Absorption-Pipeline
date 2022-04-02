@@ -238,12 +238,14 @@ def job_loop(targets, sbid, status_folder, src_beam_map, active_ids, active_ms, 
                 comp_name, array_id, len(active_ids), tgt_ms))
             # run_os_cmd('./make_askap_abs_cutout.sh {} {}'.format(array_id, status_folder))
             me = Path(__file__)
-            script = Path(me.parent, 'start_job.sh')
+            script = Path(me.parent, 'start_job.pbs')
+            script_folder = me.parent
 
             if use_pbs:
                 run_os_cmd(
-                    ('qsub -v COMP_INDEX={0},SBID={2},STATUS_DIR={3} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
-                     '-e {1}/askap_abs_{0}_e.log {4}').format(array_id, log_folder, sbid, status_folder, script))
+                    ('qsub -v COMP_INDEX={0},SBID={2},STATUS_DIR={3},SCRIPT_DIR={4} -N "ASKAP_abs{0}" -o {1}/askap_abs_{0}_o.log '
+                     '-e {1}/askap_abs_{0}_e.log {5}').format(array_id, log_folder, sbid, status_folder, script_folder, 
+                     script))
             else:
                 run_os_cmd('{} {} {} "{}"'.format(script, array_id, sbid, status_folder))
         elif not rate_limited:
