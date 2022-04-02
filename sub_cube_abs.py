@@ -53,8 +53,8 @@ def get_ms_pattern(sbid):
             if int(row[0]) == sbid:
                 #print (row)
                 pattern = row[1]
-                velocity = row[2]
-                return pattern, velocity
+                #velocity = row[2]
+                return pattern#, velocity
     raise Exception('Unknown sbid={}'.format(sbid))
 
 
@@ -68,7 +68,8 @@ def main():
     print ("Starting extract of subcube for sbid {} sample {} comp {} width {}".format(sbid, sample_id, comp_name, chan_width))
     print (comp_name, ra, dec, beams)
     vis = []
-    pattern, velocity = get_ms_pattern(sbid)
+    #pattern, velocity = get_ms_pattern(sbid)
+    pattern = get_ms_pattern(sbid)
     for beam in beams:
         num = beam[0:2]
         interleave = beam[2]
@@ -82,10 +83,10 @@ def main():
     print ('Processing input visibilities of ' + str(vis))
     klambda = '1.5'
     uvdist='>{}Klambda'.format(klambda)
-    start_vel=velocity+'m/s'
+    #start_vel=velocity+'m/s'
     phasecenter='J2000 {}deg {}deg'.format(ra, dec)
     tclean (vis=vis,specmode='cube',imagename=image_name,reffreq='1.42040571183GHz',restfreq='1.42040571183GHz',
-      phasecenter=phasecenter,imsize=50,uvrange=uvdist,weighting='natural', start=start_vel,
+      phasecenter=phasecenter,imsize=50,uvrange=uvdist,weighting='natural', 
       gridder='standard', pbcor=True, width=chan_width, niter=1000, cell='1arcsec', 
       vptable='../ASKAP_AIRY_BP.tab')
     if not os.path.exists(image_name+'.image'):
