@@ -43,13 +43,22 @@ def output_location_plots(f, source_map='figures/source_loc.png'):
     f.write('\n<div class="row px-3" id="maps">')
     f.write('\n<div class="col-md-auto"><h2 class="d-inline font-weight-light text-center text-lg-left mt-4 mb-0">Location</hs></div>')
     f.write('\n<div class="col-md-auto">')
+    f.write('\nField Location')
     f.write('\n<a href="figures/field_loc.png" class="d-block mb-4 h-100"  data-lightbox="maps">')
     f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="figures/field_loc.png" alt="Map of the location of the field.">')
     f.write('\n</a>\n</div>')
     f.write('\n<div class="col-md-auto">')
+    has_mw_loc_plot = os.path.exists(os.path.dirname(f.name)+'/figures/source_loc_mw.png')
+    f.write('\n{}Absorption Locations'.format('Magellanic ' if has_mw_loc_plot else ''))
     f.write('\n<a href="{}" class="d-block mb-4 h-100"  data-lightbox="maps">'.format(source_map))
     f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="{}" alt="Map of the location of the sources.">'.format(source_map))
     f.write('\n</a>\n</div>')
+    if has_mw_loc_plot:
+        f.write('\n<div class="col-md-auto">')
+        f.write('\nMilky Way Absorption Locations')
+        f.write('\n<a href="{}" class="d-block mb-4 h-100"  data-lightbox="maps">'.format('figures/source_loc_mw.png'))
+        f.write('\n<img class="img-fluid img-thumbnail" style="height: 180px" src="{}" alt="Map of the location of the Milky Way sources.">'.format('figures/source_loc_mw.png'))
+        f.write('\n</a>\n</div>')
     print(os.path.dirname(f.name)+'/figures/long_vel.png')
     if os.path.exists(os.path.dirname(f.name)+'/figures/long_vel.png'):
         f.write('\n<div class="col-md-auto">')
@@ -71,9 +80,9 @@ def output_block_title(f, rating, first, count):
 
     
 def output_img(f, comp_name, rating, id, combined=False):
-    zoom_file_pattern = 'spectra/{0}_combined.png' if combined else 'spectra/{0}_spec_zoom.png'
+    zoom_file_pattern = 'figures/{0}_combined.png' if combined else 'figures/{0}_spec_zoom.png'
     zoom_filename = zoom_file_pattern.format(comp_name)
-    file_pattern = 'spectra/{0}_combined.png' if combined else 'spectra/{0}_spec.png'
+    file_pattern = 'figures/{0}_combined.png' if combined else 'figures/{0}_spec.png'
     filename = file_pattern.format(comp_name)
     f.write('\n<div class="col-lg-3 col-md-4 col-6 px-2">')
     f.write('<figure class="figure d-block">')
@@ -87,7 +96,7 @@ def output_img(f, comp_name, rating, id, combined=False):
 
     
 def output_non_zoom_img(f, comp_name, rating, id):
-    file_pattern = 'spectra/{0}_spec.png'
+    file_pattern = 'figures/{0}_spec.png'
     filename = file_pattern.format(comp_name)
     f.write('\n<div class="col-lg-3 col-md-4 col-6 px-2">')
     f.write('<figure class="figure d-block">')
