@@ -1220,6 +1220,9 @@ def main():
     #plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
     plot_source_noise_map(spectra_table, figures_folder, is_milky_way, spectra_table['sd_cont'] > 0.3, 
         background=mom0_file)
+    if ~is_milky_way:
+        plot_source_noise_map(spectra_table, figures_folder, True, spectra_table['sd_cont'] > 0.3, 
+            background=mom0_file, name='source_loc_mw')
     plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
     plot_all_spectra(spectra_table, abs_table, spectra_folder, figures_folder, args.no_zoom, args.smooth, is_milky_way)
 
