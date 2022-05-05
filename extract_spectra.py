@@ -712,6 +712,11 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
 def add_column_density(spectra_table):
     # read in mom0 map
+    mag_sys_mom0 = 'hi_zea_ms_mom0.fits'
+    if not os.path.exists(mag_sys_mom0):
+        print ("Could not find {}, no column density information available.".format(mag_sys_mom0))
+        return
+    
     gass_mom0 = fits.open('hi_zea_ms_mom0.fits')
     gass_wcs = WCS(gass_mom0[0].header)
     gass_no_nan_data = np.nan_to_num(gass_mom0[0].data)
@@ -1217,13 +1222,17 @@ def main():
 
     # Produce consolidated plots
     mom0_file = 'hi_zea_all_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
-    #plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
-    plot_source_noise_map(spectra_table, figures_folder, is_milky_way, spectra_table['sd_cont'] > 0.3, 
-        background=mom0_file)
-    if ~is_milky_way:
-        plot_source_noise_map(spectra_table, figures_folder, True, spectra_table['sd_cont'] > 0.3, 
-            background=mom0_file, name='source_loc_mw')
-    plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
+    if os.path.exists(mom0_file):
+        #plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
+        plot_source_noise_map(spectra_table, figures_folder, is_milky_way, spectra_table['sd_cont'] > 0.3, 
+            background=mom0_file)
+        if ~is_milky_way:
+            plot_source_noise_map(spectra_table, figures_folder, True, spectra_table['sd_cont'] > 0.3, 
+                background=mom0_file, name='source_loc_mw')
+        plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
+    else:
+        print ('Not producing location plots as unable to find {}'.format(mom0_file))
+        
     plot_all_spectra(spectra_table, abs_table, spectra_folder, figures_folder, args.no_zoom, args.smooth, is_milky_way)
 
     # DS9 files
