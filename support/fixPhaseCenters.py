@@ -26,7 +26,8 @@ import os
 import sys
 import numpy as np
 from casacore.tables import *
-from askap.footprint import Skypos
+from astropy.coordinates import SkyCoord, FK5
+import astropy.units as u
 
 if len(sys.argv) != 2:
     sys.exit("Usage %s <ms_file>" %(sys.argv[0]))
@@ -61,8 +62,10 @@ if os.path.exists(field_file) == False:
 ## open POINTING table to delete row
 tpoint = table("%s/POINTING" % (ms), readonly = False, ack=False)
 a = tpoint.rownumbers()
-tpoint.removerows(a)
-print('Deleted POINTING table from: %s' % (ms))
+# print ("Pointing shape: {}, last entry {} table len {}.".format(len(a), (a[-1] if len(a) > 0 else 'None'), len(tpoint)))
+if len(tpoint) > 0:
+    tpoint.removerows(a)
+    print('Deleted POINTING table from: %s' % (ms))
 
 # Load the FIELD table from the field file.
 ms_phase = np.load(field_file, allow_pickle=True)
@@ -88,18 +91,16 @@ for field in range(n_fields):
     p_phase = ms_phase[field]
     
     # Shift the pointing centre by the beam offset
-    phase = Skypos(p_phase[0][0], p_phase[0][1], 9, 9)
-    new_pos = phase.shift(-offset[0][0], offset[0][1])
-    new_pos.rn = 15
-    new_pos.dn = 15
-    new_pos_str = "%s" %(new_pos)
+    phase = SkyCoord(p_phase[0][0]*u.rad, p_phase[0][1]*u.rad, frame=FK5)
+    new_pos = phase.spherical_offsets_by(-offset[0][0]*u.rad, offset[0][1]*u.rad)
+    new_pos_str = "%s" %(new_pos.to_string('hmsdms',precision=3))
     print("Setting position of beam %d, field %d to %s" %(beam, field, new_pos_str))
     # Update the FIELD table with the beam position
-    new_ra = new_pos.ra
+    new_ra = new_pos.ra.rad
     if new_ra > np.pi:
         new_ra -= 2.0 * np.pi
     ms_phase[field][0][0] = new_ra
-    ms_phase[field][0][1] = new_pos.dec
+    ms_phase[field][0][1] = new_pos.dec.rad
 
 # Write the updated beam positions in to the MS.
 tp.putcol("DELAY_DIR", ms_phase)
