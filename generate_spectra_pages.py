@@ -79,7 +79,7 @@ def output_block_title(f, rating, first, count):
     f.write('\n<div class="row text-center text-lg-left collapse show" id="spectra{}">'.format(rating))
 
     
-def output_img(f, comp_name, rating, id, combined=False):
+def output_img(f, comp_name, rating, id, comment, combined=False):
     zoom_file_pattern = 'figures/{0}_combined.png' if combined else 'figures/{0}_spec_zoom.png'
     zoom_filename = zoom_file_pattern.format(comp_name)
     file_pattern = 'figures/{0}_combined.png' if combined else 'figures/{0}_spec.png'
@@ -90,7 +90,7 @@ def output_img(f, comp_name, rating, id, combined=False):
     f.write('\n<img class="img-fluid img-thumbnail" ')
     f.write('src="{0}" alt="Zoomed preview of spectrum at {1}">'.format(zoom_filename, comp_name))
     f.write('\n</a>')
-    f.write('<figcaption class="figure-caption text-right">Source #{} {}</figcaption>'.format(id, comp_name))
+    f.write('<figcaption class="figure-caption text-right">Source #{} {} {}</figcaption>'.format(id, comp_name, comment))
     f.write('\n</figure></div>')
     return
 
@@ -156,6 +156,10 @@ def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=F
             sorted_targets = targets[sort_order]
             comp_names = sorted_targets['comp_name']
             ids = sorted_targets['id']
+            maj_axes = sorted_targets['semi_maj_axis']*2
+            min_axes = sorted_targets['semi_min_axis']*2
+            fluxes_int = sorted_targets['flux_int']
+
             print('Rating {} has {} spectra'.format(rating, len(comp_names)))
 
             if verbose:
@@ -164,7 +168,8 @@ def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=F
             output_block_title(f, rating, rating=='A', len(comp_names))
 
             for idx, name in enumerate(comp_names):
-                output_img(f, name, rating, ids[idx], combined=True)
+                comment = '{:.0f}x{:.0f}" {:.0f} mJy'.format(maj_axes[idx], min_axes[idx], fluxes_int[idx])
+                output_img(f, name, rating, ids[idx], comment, combined=True)
                     
         output_footer(f)
 
@@ -186,6 +191,9 @@ def output_listed_spectra(sbid, table, title, filename, comp_names_list, verbose
             sorted_targets = targets[sort_order]
             comp_names = sorted_targets['comp_name']
             ids = sorted_targets['id']
+            maj_axes = sorted_targets['semi_maj_axis']*2
+            min_axes = sorted_targets['semi_min_axis']*2
+            fluxes_int = sorted_targets['flux_int']
             print('Rating {} has {} spectra'.format(rating, len(comp_names)))
 
             if verbose:
@@ -194,8 +202,9 @@ def output_listed_spectra(sbid, table, title, filename, comp_names_list, verbose
             output_block_title(f, rating, rating=='A', len(comp_names))
 
             for idx, name in enumerate(comp_names):
+                comment = '{:.0f}x{:.0f}" {:.0f} mJy'.format(maj_axes[idx], min_axes[idx], fluxes_int[idx])
                 if zoomed:
-                    output_img(f, name, rating, ids[idx], combined=True)
+                    output_img(f, name, rating, ids[idx], comment, combined=True)
                 else:
                     output_non_zoom_img(f, name, rating, ids[idx])
                     
@@ -238,6 +247,9 @@ def output_diff_sigma_spectra(sbid, table, title, filename, verbose=False, sourc
                 sorted_targets = targets[sort_order]
                 comp_names = sorted_targets['comp_name']
                 ids = sorted_targets['id']
+                maj_axes = sorted_targets['semi_maj_axis']*2
+                min_axes = sorted_targets['semi_min_axis']*2
+                fluxes_int = sorted_targets['flux_int']
                 print('Rating {} has {} spectra'.format(rating, len(comp_names)))
                 if len(comp_names) == 0:
                     continue
@@ -249,8 +261,9 @@ def output_diff_sigma_spectra(sbid, table, title, filename, verbose=False, sourc
                 first = False
 
                 for idx, name in enumerate(comp_names):
+                    comment = '{:.0f}x{:.0f}" {:.0f} mJy'.format(maj_axes[idx], min_axes[idx], fluxes_int[idx])
                     if zoomed:
-                        output_img(f, name, rating, ids[idx], combined=True)
+                        output_img(f, name, rating, ids[idx], comment, combined=True)
                     else:
                         output_non_zoom_img(f, name, rating, ids[idx])
                     

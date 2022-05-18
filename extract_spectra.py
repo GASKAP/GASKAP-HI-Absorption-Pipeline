@@ -98,6 +98,8 @@ def parseargs():
                         required=False)
     parser.add_argument("--source_scaling", help="The ratio by which source ellipses will be scaled when extracting spectra", type=float,
                         default=1.0, required=False)
+    parser.add_argument("--averaging", help="How many channels should be averaged together, default is no averaging", type=int,
+                        required=False)
             
 
     args = parser.parse_args()
@@ -281,6 +283,21 @@ target_name=None):
     return spectrum_array
 
 
+def average_array(values, num_chan=4):
+    # Pad with nans to be a multiple of the number of channels
+    padded = np.r_[values, math.nan + np.zeros((-len(values) % num_chan,))]
+    return np.nanmean(padded.reshape(-1, num_chan), axis=-1)
+
+
+def average_spectrum(spectrum):
+    velocity = average_array(spectrum['velocity'])
+    flux = average_array(spectrum['flux'])
+    avg_spectrum = rec.fromarrays(
+        [np.arange(velocity.size), velocity, flux],
+        names='plane,velocity,flux')
+    return avg_spectrum
+
+
 def highlight_features(ax, ranges):
     if ranges is not None:
         ylim = ax.get_ylim()
@@ -305,7 +322,7 @@ def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_optical_dep
     axs[0].grid(True)
     if smoothed_od is not None:
         axs[0].plot(velocity, opacity, zorder=5, lw=0.5)
-        axs[0].fill_between(velocity, 1-sigma_optical_depth, 1+sigma_optical_depth, color='lightblue', alpha=0.4, zorder=2)
+        axs[0].fill_between(velocity, 1-sigma_smoothed_od, 1+sigma_smoothed_od, color='lightblue', alpha=0.4, zorder=2)
 
     highlight_features(axs[0], ranges)
 
@@ -435,7 +452,7 @@ def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_star
 
 
 def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder, spectra_folder, sbid, weighting, 
-                        source_scaling, max_spectra = 5000, cont_range=(-100,-60)):
+                        source_scaling, averaging, max_spectra = 5000, cont_range=(-100,-60)):
     print('Processing {} cutouts into spectra, input:{}'.format(len(targets), cutouts_folder))
 
     i = 0
@@ -466,6 +483,9 @@ def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_tab
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
         spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
         
+        if averaging > 1:
+            spectrum = average_spectrum(spectrum)
+
         process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
 
     return None
@@ -1101,18 +1121,28 @@ def output_reg_file(filename, sources):
                 src['ra'], src['dec'], smaj, smin, src['pa'], src['comp_name'])
             writer.write(shape)
 
-def export_ds9_regions(spectra_table, parent_folder, detect_field='has_mw_abs'):
+def export_ds9_regions(spectra_table, parent_folder):
 
     print('\nOutputting DS9 region files.')
 
-    detections = spectra_table[spectra_table[detect_field]]
-    filename = parent_folder+'detections.reg'
-    print (" Outputting {} detections to {}".format(len(detections), filename))
+    detections = spectra_table[spectra_table['has_mw_abs']]
+    filename = parent_folder+'mw_detections.reg'
+    print (" Outputting {} MW detections to {}".format(len(detections), filename))
     output_reg_file(filename, detections)
 
-    non_detections = spectra_table[~spectra_table[detect_field]]
-    filename = parent_folder+'non_detections.reg'
-    print (" Outputting {} non detections to {}".format(len(non_detections), filename))
+    detections = spectra_table[spectra_table['has_other_abs']]
+    filename = parent_folder+'mag_detections.reg'
+    print (" Outputting {} Magellanic detections to {}".format(len(detections), filename))
+    output_reg_file(filename, detections)
+
+    non_detections = spectra_table[~spectra_table['has_mw_abs']]
+    filename = parent_folder+'mw_non_detections.reg'
+    print (" Outputting {} MW non detections to {}".format(len(non_detections), filename))
+    output_reg_file(filename, non_detections)
+
+    non_detections = spectra_table[~spectra_table['has_other_abs']]
+    filename = parent_folder+'mag_non_detections.reg'
+    print (" Outputting {} Magellanic non detections to {}".format(len(non_detections), filename))
     output_reg_file(filename, non_detections)
 
 
@@ -1133,6 +1163,7 @@ def log_config(args, cutout_folder, figures_folder, spectra_folder):
     print (' {: >20} : {}'.format('no_zoom', args.no_zoom))
     print (' {: >20} : {}'.format('weighting', args.weighting))
     print (' {: >20} : {}'.format('smooth', args.smooth))
+    print (' {: >20} : {}'.format('averaging', args.averaging))
     print (' {: >20} : {}'.format('island_groups', args.island_groups))
     print (' {: >20} : {}'.format('island_cat', args.island_cat))
     print (' {: >20} : {}'.format('source_scaling', args.source_scaling))
@@ -1195,7 +1226,7 @@ def main():
                 cont_range=continuum_range)
         else:
             spectra = extract_all_component_spectra(targets, file_list, cutout_folder, selavy_table, figures_folder, spectra_folder, 
-                args.sbid, args.weighting, args.source_scaling, cont_range=continuum_range)
+                args.sbid, args.weighting, args.source_scaling, args.averaging, cont_range=continuum_range)
     else:
         print ("**Skipping spectra extraction - reusing existing spectra")
 
