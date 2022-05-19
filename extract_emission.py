@@ -282,7 +282,7 @@ def main():
     spectra_folder = parent_folder + 'spectra/'
     prep_folders([spectra_folder])
 
-    targets = read_targets('targets_{}.csv'.format(args.sbid))
+    targets = read_targets('{}targets_{}.csv'.format(parent_folder, args.sbid))
     
     # Extract emission spectra
     tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets)
