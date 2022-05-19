@@ -31,8 +31,6 @@ def parseargs():
                                      description="Produce emission spectra for a set of sources")
     parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
                         type=int, required=True)
-    parser.add_argument("-c", "--catalogue", help="The catalgoue of source positions and characteristics",
-                        required=True)
     parser.add_argument("-e", "--emission", help="The HI emission cube to source emission data around each source.",
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
@@ -74,13 +72,6 @@ def read_targets(targets_file):
     table.add_column(Column(name='beams', data=beams))
 
     return table
-
-
-def rename_columns(table):
-    names = np.asarray(table.colnames)
-    for name in names:
-        if name.startswith('col_'):
-            table.rename_column(name, name[4:])
 
 
 def prep_folders(folders):
@@ -288,17 +279,11 @@ def main():
         print("Error: File {} does not exist.".format(args.emission))
         return 1
 
-    figures_folder = parent_folder + 'figures/'
     spectra_folder = parent_folder + 'spectra/'
     prep_folders([spectra_folder])
 
     targets = read_targets('targets_{}.csv'.format(args.sbid))
     
-    # Read and filter catalogue
-    src_votable = votable.parse(args.catalogue, pedantic=False)
-    selavy_table = src_votable.get_first_table().to_table()
-    rename_columns(selavy_table)
-
     # Extract emission spectra
     tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets)
     output_emission_spectra(targets, tb_mean_all, tb_std_all, velocities, spectra_folder)
