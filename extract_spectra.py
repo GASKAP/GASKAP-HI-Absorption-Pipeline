@@ -355,7 +355,8 @@ def output_spectrum(spec_folder, spectrum_array, opacity, sigma_optical_depth, s
 def match_emission_to_absorption(em_mean, em_std, em_velocity, abs_velocity):
     em_vel_pos = (em_velocity[1] - em_velocity[0]) > 0
     abs_vel_pos = (abs_velocity[1] - abs_velocity[0]) > 0
-    if abs_vel_pos != em_vel_pos:
+    #print ('em vel: {} abs vel: {}'.format(em_velocity[:3], abs_velocity[:3]))
+    if not em_vel_pos:
         #print("Reversing emission data")
         em_mean = np.flip(em_mean, 0)
         em_std = np.flip(em_std, 0)
@@ -364,6 +365,7 @@ def match_emission_to_absorption(em_mean, em_std, em_velocity, abs_velocity):
     # Can we assume these are already in the same scale? Maybe not if we intend to do higher spectral resolution spectra for some sources
     em_mean_interp = np.interp(abs_velocity, em_velocity, em_mean, left=0, right=0)
     em_std_interp = np.interp(abs_velocity, em_velocity, em_std, left=0, right=0)
+    #print (' Num non zero em:', np.count_nonzero(em_mean_interp))
     return em_mean_interp, em_std_interp
 
 
@@ -483,7 +485,7 @@ def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_tab
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
         spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
         
-        if averaging > 1:
+        if averaging and averaging > 1:
             spectrum = average_spectrum(spectrum)
 
         process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
@@ -949,7 +951,7 @@ def plot_background_map(fig, background):
 
     wcs = WCS(mom0[0].header)
     ax = fig.add_subplot(111, projection=wcs)
-    im = ax.imshow(nh_data, cmap='gist_yarg', vmin=vmin, vmax=vmax, alpha=0.6, norm=norm)
+    im = ax.imshow(nh_data, cmap='gist_yarg', alpha=0.6, norm=norm)
 
     lon = ax.coords[0]
     lat = ax.coords[1]
@@ -1034,7 +1036,7 @@ def plot_source_noise_map(spectra_table, figures_folder, is_mw, trimmed, backgro
     prefix = figures_folder + "/" + name
     print ("  Output", prefix+".png")
     fig.savefig(prefix + ".png", bbox_inches='tight')
-    fig.savefig(prefix + ".pdf", bbox_inches='tight')
+    #fig.savefig(prefix + ".pdf", bbox_inches='tight')
 
 
 def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0.fits'):
