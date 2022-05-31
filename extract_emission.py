@@ -17,6 +17,7 @@ from astropy.io.votable.tree import Param,Info
 from astropy.io.votable import from_table, parse_single_table, writeto
 from astropy.table import Table, Column
 from astropy.utils.exceptions import AstropyWarning
+import matplotlib.pyplot as plt
 import numpy as np
 
 from spectral_cube import SpectralCube
@@ -105,32 +106,34 @@ def extract_channel_slab(filename, chan_start, chan_end):
 
 
 def extract_emission_around_source(slab, pos, radius_outer, radius_inner):
-    xp = np.int(pos[0])
-    yp = np.int(pos[1])
+    xp = int(pos[0])
+    yp = int(pos[1])
 
     # Only pull spectra whose positions fall on the footprint of the cube (this should be all, right?)
-    if (xp < radius_outer) or (xp > slab.shape[2]-radius_outer) or (yp < radius_outer) or (yp > slab.shape[1]-radius_outer):
-        print ("Skipping")
+    if (xp < radius_outer) or (xp >= slab.shape[2]-radius_outer) or (yp < radius_outer) or (yp >= slab.shape[1]-radius_outer):
+        print ("Skipping source at x:{} y:{} outside cube of x:{}. y:{}".format(xp, yp, slab.shape[2], slab.shape[1]))
         empty_result = np.zeros(slab.shape[0])
-        return empty_result, empty_result
+        return empty_result, empty_result, None
 
     # Define pixel coordinates of a grid surrounding each target
     center = (xp, yp)
-    imin = center[0] - radius_outer
+    imin = max(0, center[0] - radius_outer)
+    #imax = min(center[0] + radius_outer + 1, slab.shape[2])
     imax = center[0] + radius_outer + 1
-    jmin = center[1] - radius_outer
+    jmin = max(0, center[1] - radius_outer)
+    #jmax = min(center[1] + radius_outer + 1, slab.shape[1])
     jmax = center[1] + radius_outer + 1
 
     # loop through and pile in all spectra which fall in the annulus, based on their distance
     # from the central pixel
     print (imin, imax, jmin, jmax)
     sub_specx = []
-    for k in np.arange(imin, imax):
-        for j in np.arange(jmin, jmax):
-            kj = np.array([k, j])
-            dist = np.linalg.norm(kj - np.array(center))
+    for iidx in np.arange(imin, imax):
+        for jidx in np.arange(jmin, jmax):
+            ij = np.array([iidx, jidx])
+            dist = np.linalg.norm(ij - np.array(center))
             if dist > radius_inner and dist <= radius_outer:
-                spec = slab[:, kj[1], kj[0]]
+                spec = slab[:, ij[1], ij[0]]
                 sub_specx = sub_specx + [spec]
     
     #print (sub_specx)
@@ -139,8 +142,11 @@ def extract_emission_around_source(slab, pos, radius_outer, radius_inner):
     # Estimate the uncertainty per channel via the standard deviation over all spectra
     tb_std = np.nanstd(sub_specx, axis=0)
     #print ('mean=',tb_mean)
+    cutout = slab[:, jmin:jmax, imin:imax]
+    mom0 = cutout.moment(order=0)
+    #mom0 = np.sum(cutout, axis=(1,2))
 
-    return tb_mean, tb_std
+    return tb_mean, tb_std, mom0
 
 
 def extract_emission_around_source_by_plane(slab, pos, radius_outer, radius_inner):
@@ -193,7 +199,28 @@ def extract_emission_around_source_by_plane(slab, pos, radius_outer, radius_inne
     return tb_mean, tb_std
 
 
-def extract_emission_spectra(cube, spectra_table, slab_size=160):
+def plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path):
+
+    for idx, src in enumerate(spectra_table):
+        data_shape = mom0_all[0].shape
+        fig, ax = plt.subplots(1, 1, figsize=(9, 3))
+        pos = ax.imshow(mom0_all[idx][:, :], origin='lower')
+        cbar = fig.colorbar(pos, ax=ax)
+        cbar.set_label("Total Intensity (K km/s)", fontsize=12)#, loc='right')
+
+        inner_circ = plt.Circle(( data_shape[0]//2 , data_shape[1]//2 ), radius_inner, fill=False, color='red') 
+        ax.add_artist(inner_circ)
+        outer_circ = plt.Circle(( data_shape[0]//2 , data_shape[1]//2 ), radius_outer, fill=False, color='red') 
+        ax.add_artist(outer_circ)
+        plt.title(src['comp_name'])
+        fname = '{}/{}_em_mom0.png'.format(fig_path, src['comp_name'])
+        print ('Plotting mom0 to ' + fname) 
+        #print ('Ellipse ra={} dec={} pa={:.03f} deg {:.03f}pi rad'.format(src['ra'], src['dec'], src['pa'], pa_rad/math.pi))
+        plt.savefig(fname, bbox_inches='tight')
+        plt.close()
+
+
+def extract_emission_spectra(cube, spectra_table, fig_path, slab_size=160):
     
     # Read the cube
     spec_cube = SpectralCube.read(cube, mode='readonly', memmap=False)
@@ -216,9 +243,11 @@ def extract_emission_spectra(cube, spectra_table, slab_size=160):
     prev = start
     tb_mean_all = []
     tb_std_all = []
+    mom0_all = []
     for s in spectra_table:
         tb_mean_all.append(np.zeros(spec_len))
         tb_std_all.append(np.zeros(spec_len))
+        mom0_all.append(np.zeros([radius_outer*2+1, radius_outer*2+1]))
     
     # Extract using slabs
     unit = None
@@ -234,9 +263,11 @@ def extract_emission_spectra(cube, spectra_table, slab_size=160):
 
         for j in range(len(pixcoord[0])):
             pos = [pixcoord[0][j],pixcoord[1][j]]
-            tb_mean, tb_std = extract_emission_around_source(slab, pos, radius_outer, radius_inner)
+            tb_mean, tb_std, mom0 = extract_emission_around_source(slab, pos, radius_outer, radius_inner)
             tb_mean_all[j][i:max_idx] = tb_mean
             tb_std_all[j][i:max_idx] = tb_std
+            if mom0 is not None:
+                mom0_all[j] += mom0.to(u.K*u.km/u.s).value
         
         checkpoint = time.time()
         print ("Reading slab of channels {} to {}, took {:.2f} s".format(i, max_idx-1, post_slab-prev))
@@ -246,6 +277,9 @@ def extract_emission_spectra(cube, spectra_table, slab_size=160):
     end = time.time()
     print("  ## Finished emission spectra extract at {}, took {:.2f} s ##".format(
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
+
+    plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path)
+
     return tb_mean_all, tb_std_all, velocities.value
 
 
@@ -280,12 +314,13 @@ def main():
         return 1
 
     spectra_folder = parent_folder + 'spectra/'
-    prep_folders([spectra_folder])
+    figures_folder = parent_folder + 'figures/'
+    prep_folders([spectra_folder, figures_folder])
 
     targets = read_targets('{}targets_{}.csv'.format(parent_folder, args.sbid))
     
     # Extract emission spectra
-    tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets)
+    tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets, figures_folder)
     output_emission_spectra(targets, tb_mean_all, tb_std_all, velocities, spectra_folder)
 
     # Report
