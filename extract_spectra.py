@@ -952,7 +952,7 @@ def add_sources(ax, sources,detection, best, is_mw):
                marker=marker, edgecolor=colour_name, facecolor=facecolor)
 
 
-def plot_background_map(fig, background):
+def plot_background_map(fig, background, gal_grid=False):
 
     # moment zero map
     mom0 = fits.open(background)
@@ -968,6 +968,8 @@ def plot_background_map(fig, background):
     norm_kwargs = {'asinh_a': abs(asinh_a)}
     norm = simple_norm(nh_data, 'asinh', min_cut=vmin, max_cut=vmax, clip=False,
                                     **norm_kwargs)
+    if gal_grid:
+        norm=None
 
     wcs = WCS(mom0[0].header)
     ax = fig.add_subplot(111, projection=wcs)
@@ -975,21 +977,40 @@ def plot_background_map(fig, background):
 
     lon = ax.coords[0]
     lat = ax.coords[1]
-    #lon.set_ticks(number=12)
-    lon.set_ticks_position('rb')
-    lon.set_ticklabel_position('rb')
-    lon.set_axislabel_position('b')
 
-    #lat.set_ticks(number=12)
-    lat.set_ticks_position('tl')
-    lat.set_ticklabel_position('tl')
-    lat.set_axislabel_position('l')
+    if gal_grid:
+        overlay = ax.get_coords_overlay('galactic')
+        print(overlay)
+        overlay['l'].set_axislabel('Galactic Longitude', fontsize=16)
+        overlay['b'].set_axislabel('Galactic Latitude', fontsize=16)
+        overlay['b'].set_axislabel_position('l')
 
-    # Add axes labels
-    ax.set_xlabel("Right Ascension (hours)", fontsize=16)
-    ax.set_ylabel("Declination (degrees)", fontsize=16)
+        overlay.grid()
 
-    ax.grid()
+        lon.set_ticks_position('')
+        lon.set_ticklabel_position('')
+        lon.set_axislabel_position('')
+
+        lat.set_ticks_position('')
+        lat.set_ticklabel_position('')
+        lat.set_axislabel_position('')
+
+    else:
+        #lon.set_ticks(number=12)
+        lon.set_ticks_position('rb')
+        lon.set_ticklabel_position('rb')
+        lon.set_axislabel_position('b')
+
+        #lat.set_ticks(number=12)
+        lat.set_ticks_position('tl')
+        lat.set_ticklabel_position('tl')
+        lat.set_axislabel_position('l')
+
+        # Add axes labels
+        ax.set_xlabel("Right Ascension (hours)", fontsize=16)
+        ax.set_ylabel("Declination (degrees)", fontsize=16)
+
+        ax.grid(True)
     return ax, wcs
 
 
@@ -998,7 +1019,7 @@ def plot_source_loc_map(spectra_table, figures_folder, is_mw, background='hi_zea
     print('\nPlotting {} source locations over background of {}.'.format(len(spectra_table), background))
 
     fig = plt.figure(figsize=(10.5, 9))
-    ax, wcs = plot_background_map(fig, background)
+    ax, wcs = plot_background_map(fig, background, gal_grid=is_mw)
 
     field_centre = get_field_centre(spectra_table)
     try:
@@ -1023,7 +1044,7 @@ def plot_source_noise_map(spectra_table, figures_folder, is_mw, trimmed, backgro
 
     fig = plt.figure(figsize=(12, 9))
 
-    ax, wcs = plot_background_map(fig, background) #, lon_tick_labels='b', fontsize=16)
+    ax, wcs = plot_background_map(fig, background, gal_grid=is_mw) #, lon_tick_labels='b', fontsize=16)
 
     field_centre = get_field_centre(spectra_table)
     try:
@@ -1249,14 +1270,14 @@ def main():
     writeto(abs_vo_table, parent_folder+'askap_absorption.vot')
 
     # Produce consolidated plots
-    mom0_file = 'hi_zea_all_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
+    mom0_file = 'hi_zea_milky_way_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
     if os.path.exists(mom0_file):
         #plot_source_loc_map(spectra_table, figures_folder, is_milky_way, background=mom0_file)
         plot_source_noise_map(spectra_table, figures_folder, is_milky_way, spectra_table['sd_cont'] > 0.3, 
             background=mom0_file)
         if ~is_milky_way:
             plot_source_noise_map(spectra_table, figures_folder, True, spectra_table['sd_cont'] > 0.3, 
-                background=mom0_file, name='source_loc_mw')
+                background='hi_zea_milky_way_mom0.fits', name='source_loc_mw')
         plot_field_loc_map(spectra_table, figures_folder, background=mom0_file)
     else:
         print ('Not producing location plots as unable to find {}'.format(mom0_file))
