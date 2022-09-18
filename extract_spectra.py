@@ -37,6 +37,13 @@ from spectral_cube import SpectralCube
 import radio_beam
 import aplpy
 
+from specutils.spectra.spectrum1d import Spectrum1D
+from specutils.fitting.continuum import fit_continuum
+
+from astropy.modeling.fitting import LinearLSQFitter
+from astropy.modeling.models import Linear1D
+
+
 
 from RadioAbsTools import cube_tools, spectrum_tools
 
@@ -586,7 +593,6 @@ def merge_runs(runs_a, runs_b):
             fullset.append(abs_run)
     return fullset
 
-
 def calc_tau(min_optical_depth, sigma_min_od):
     if min_optical_depth > 0:
         peak_tau = -1*np.log(min_optical_depth)
@@ -617,6 +623,18 @@ def calc_tau_ew(optical_depth, sigma_od, velocity_res):
     e_ew = np.sqrt(np.sum((-1*np.log(1-sigma_od))**2))*velocity_res
     return ew, e_ew
 
+def find_continuum_slope(velocity, flux, verbose=False):
+    spectrum = Spectrum1D(flux=flux, spectral_axis=velocity)
+    linear = Linear1D(slope=0.0, intercept=1.0)
+    with warnings.catch_warnings():  # Ignore warnings
+        warnings.simplefilter('ignore')
+        fitted_continuum = fit_continuum(spectrum, model=linear)
+    y_fit = fitted_continuum(velocity)
+    angle = math.atan((fitted_continuum.slope/fitted_continuum.intercept).value*1e3)*u.rad.to(u.deg)
+    if verbose:
+        print ("Angle of {:.2f} deg".format(angle))
+    return fitted_continuum, y_fit, angle
+
 
 def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, source_scaling, cont_range=(-100,-60),
                     use_smoothed=False):
@@ -626,9 +644,9 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
     src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
             'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
-            'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag'),
+            'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag', 'continuum_slope'),
             dtype=('int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None),
+            'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None, 'float64'),
             meta={'name': 'ASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
 
     abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
@@ -683,6 +701,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         continuum_start_vel = cont_range[0]*u.km.to(u.m)
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
+        fitted_continuum, y_fit, continuum_slope = find_continuum_slope(abs_spec['velocity']/1e3*u.m/u.s, abs_spec['flux']*u.Jy)
         #print (mean_cont, sd_cont, abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
         poor_noise_flag = check_noise(optical_depth, sigma_optical_depth)
@@ -717,7 +736,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
         src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
                         rating, src['flux_peak']*u.Jy, src['flux_int']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                         min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
-                        src['b'], src['pa'], 0, poor_noise_flag])
+                        src['b'], src['pa'], 0, poor_noise_flag, continuum_slope])
 
     for rating in 'ABCDEF':
         count = np.sum(src_table['rating'] == rating)
@@ -787,6 +806,7 @@ def add_spectra_column_metadata(spectra_vo_table):
     add_col_metadata(spectra_vo_table, 'pa', 'Position angle before deconvolution measured as degrees CCW of North.', units='deg', ucd='phys.angSize;pos.posAng;em.radio;stat.fit')
     add_col_metadata(spectra_vo_table, 'n_h', 'Column density towards the background source excluding Milky Way velocities, from the GASS survey.', units='cm-2', ucd='phys.columnDensity')
     add_col_metadata(spectra_vo_table, 'noise_flag', 'Flag to indicate that the noise for the spectrum may be underestimated.', datatype='boolean')
+    add_col_metadata(spectra_vo_table, 'continuum_slope', 'The angle of the continuum. Expected to be close to zero.', units='deg')
 
 
 def add_absorption_column_metadata(abs_vo_table):
@@ -1054,31 +1074,6 @@ def plot_field_loc_map(spectra_table, figures_folder, background='hi_zea_ms_mom0
     print ("  Output", prefix+".png")
     fig.savefig(prefix + ".png", bbox_inches='tight')
     fig.savefig(prefix + ".pdf", bbox_inches='tight')
-
-
-def output_emission_spectra(spectra_table, spectra_folder):
-    for idx, source in enumerate(spectra_table):
-        comp_name = source['comp_name']
-        filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
-        emission_votable = votable.parse(filename, pedantic=False)
-        emission_tab = emission_votable.get_first_table().to_table()
-
-        velocities = emission_tab['velocity']
-        tb_mean = emission_tab['em_mean']
-        tb_std = emission_tab['em_std']
-
-        if np.sum(tb_mean) == 0:
-            print ("Source {} has all no emisision data".format(comp_name))
-
-        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
-        abs_spec_votable = parse_single_table(abs_spec_filename)
-        abs_spec = abs_spec_votable.to_table()
-
-        title = 'Source #{} {}'.format(source['id'], comp_name)
-        filename = '{}/{}_combined.png'.format(spectra_folder, comp_name)
-        plot_combined_spectrum(velocities/1000, tb_mean, tb_std, 
-            abs_spec['velocity']/1000, abs_spec['optical_depth'], abs_spec['sigma_od'], 
-            filename, title)
 
 
 def plot_all_spectra(spectra_table, abs_table, spectra_folder, figures_folder, no_zoom, use_smoothed, is_milky_way):
