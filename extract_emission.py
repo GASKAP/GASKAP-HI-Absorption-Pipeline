@@ -36,6 +36,8 @@ def parseargs():
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
                         required=False)
+    parser.add_argument("-q", "--qualifier", help="The qualifier to append to the spectra filenames (before the type suffix)",
+                        type=str, required=False)
     args = parser.parse_args()
     return args
 
@@ -199,7 +201,7 @@ def extract_emission_around_source_by_plane(slab, pos, radius_outer, radius_inne
     return tb_mean, tb_std
 
 
-def plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path):
+def plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path, qual):
 
     for idx, src in enumerate(spectra_table):
         data_shape = mom0_all[0].shape
@@ -213,14 +215,14 @@ def plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path)
         outer_circ = plt.Circle(( data_shape[0]//2 , data_shape[1]//2 ), radius_outer, fill=False, color='red') 
         ax.add_artist(outer_circ)
         plt.title(src['comp_name'])
-        fname = '{}/{}_em_mom0.png'.format(fig_path, src['comp_name'])
+        fname = '{}/{}_em{}_mom0.png'.format(fig_path, qual, src['comp_name'])
         print ('Plotting mom0 to ' + fname) 
         #print ('Ellipse ra={} dec={} pa={:.03f} deg {:.03f}pi rad'.format(src['ra'], src['dec'], src['pa'], pa_rad/math.pi))
         plt.savefig(fname, bbox_inches='tight')
         plt.close()
 
 
-def extract_emission_spectra(cube, spectra_table, fig_path, slab_size=160):
+def extract_emission_spectra(cube, spectra_table, fig_path, qual, slab_size=160):
     
     # Read the cube
     spec_cube = SpectralCube.read(cube, mode='readonly', memmap=False)
@@ -278,12 +280,12 @@ def extract_emission_spectra(cube, spectra_table, fig_path, slab_size=160):
     print("  ## Finished emission spectra extract at {}, took {:.2f} s ##".format(
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(end)), end-start))
 
-    plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path)
+    plot_all_mom0(spectra_table, mom0_all, radius_inner, radius_outer, fig_path, qual)
 
     return tb_mean_all, tb_std_all, velocities.value
 
 
-def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder):
+def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, spectra_folder, qualifier):
     print (velocities)
     for idx, source in enumerate(spectra_table):
         tb_mean = tb_mean_all[idx]
@@ -291,7 +293,7 @@ def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, 
         comp_name = source['comp_name']
         if np.sum(tb_mean) == 0:
             print ("Source {} has all no emission data".format(comp_name))
-        filename = '{}/{}_emission.vot'.format(spectra_folder, comp_name)
+        filename = '{}/{}_emission{}.vot'.format(spectra_folder, comp_name, qual)
         output_emission_spectrum(source, comp_name, velocities, tb_mean, tb_std, filename)
 
 def main():
@@ -317,11 +319,20 @@ def main():
     figures_folder = parent_folder + 'figures/'
     prep_folders([spectra_folder, figures_folder])
 
-    targets = read_targets('{}targets_{}.csv'.format(parent_folder, args.sbid))
+    targets_fname = '{}targets_{}.csv'.format(parent_folder, args.sbid)
+
+    print (' Emission filename', args.emission)
+    print (' Spectra folder', spectra_folder)
+    print (' Figures folder', figures_folder)
+    print (' Target list', targets_fname)
+    print (' Spectra qualifier', args.qualifier)
+
+    targets = read_targets(targets_fname)
     
     # Extract emission spectra
-    tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets, figures_folder)
-    output_emission_spectra(targets, tb_mean_all, tb_std_all, velocities, spectra_folder)
+    qual = "" if args.qualifier is None else '_'+args.qualifier
+    tb_mean_all, tb_std_all, velocities = extract_emission_spectra(args.emission, targets, figures_folder, qual)
+    output_emission_spectra(targets, tb_mean_all, tb_std_all, velocities, spectra_folder, qual)
 
     # Report
     end = time.time()
