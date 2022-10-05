@@ -11,7 +11,7 @@
 # * ..ds9regions.zip - DS9 region files for detections and non detections.
 # * ..catalogues.zip - The spectra and absorption detections catalogues in VOTable format.
 
-if [ -z "$1" ]; then
+if [ $# -lt 1 ]; then
     echo "Usage: ${0} sbid [folder] [prefix]"
     exit 1
 fi

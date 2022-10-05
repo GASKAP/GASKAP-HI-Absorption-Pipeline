@@ -423,6 +423,14 @@ def check_noise(opacity, sigma_optical_depth):
     return (clipped_ratio > 1) & (max_sn < 10)
 
 
+def merge_emission(em_mean, em_std, velocity, interp_em_mean, interp_em_std, file_velocity):
+    min_file_vel = np.min(file_velocity)-1
+    max_file_vel = np.max(file_velocity)+1
+    file_range = (velocity >= min_file_vel) &  (velocity <= max_file_vel)
+    em_mean[file_range] = interp_em_mean[file_range]
+    em_std[file_range] = interp_em_std[file_range]
+
+
 def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel):
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
@@ -447,14 +455,17 @@ def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_star
         sigma_optical_depth = calc_sigma_tau(sd_cont, pb_em_mean, opacity)
         sigma_optical_depth_smooth = calc_sigma_tau(sd_cont_smooth, pb_em_mean, opacity)
 
-        # Read the emission spectrum
-        filename = '{0}/{1}_emission.vot'.format(spectra_folder, comp_name)
-        if os.path.exists(filename):
+        # Read the emission spectra
+        em_mean = np.zeros(spectrum.velocity.shape)
+        em_std = np.zeros(spectrum.velocity.shape)
+        file_list = glob.glob('{0}/{1}_emission*.vot'.format(spectra_folder, comp_name))
+        for filename in file_list:
+            print("Reading emission file", filename)
             emission_votable = votable.parse(filename, pedantic=False)
             emission_tab = emission_votable.get_first_table().to_table()
-            em_mean, em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
-        else:
-            em_mean = em_std = np.zeros(spectrum.velocity.shape)
+            file_em_mean, file_em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
+            merge_emission(em_mean, em_std, spectrum.velocity, file_em_mean, file_em_std, emission_tab['velocity'])
+        
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
             sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel)
