@@ -44,8 +44,8 @@ from astropy.modeling.fitting import LinearLSQFitter
 from astropy.modeling.models import Linear1D
 
 
-
-from RadioAbsTools import cube_tools, spectrum_tools
+import utils.cube_tools as cube_tools
+import utils.spectrum_tools as spectrum_tools
 
 
 class AbsRun:
