@@ -17,12 +17,12 @@ import zipfile
 
 import astropy.units as u
 from astropy.convolution import convolve
-from astropy.coordinates import SkyCoord, FK5
+from astropy.coordinates import SkyCoord, FK5, search_around_sky
 from astropy.io import fits, votable
 from astropy.io.ascii import Csv
 from astropy.io.votable.tree import Param,Info
 from astropy.io.votable import from_table, parse_single_table, writeto
-from astropy.table import QTable, Table, Column
+from astropy.table import QTable, Table, Column, hstack
 from astropy.utils.exceptions import AstropyWarning
 from astropy.visualization import simple_norm
 from astropy.wcs import WCS
@@ -207,7 +207,7 @@ def get_source(file_list, target_name, comp_name, selavy_table, folder=None, sca
     
     key = 'component_name' if 'component_name' in selavy_table.colnames else 'island_name'
     comp_cat_rows = selavy_table[selavy_table[key]==comp_name]
-    print ("Found {} rows for comp_name {} and key {}".format(len(comp_cat_rows), comp_name, key))
+    #print ("Found {} rows for comp_name {} and key {}".format(len(comp_cat_rows), comp_name, key))
     if len(comp_cat_rows) == 0:
         return None
 
@@ -233,8 +233,6 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     :param latitude: The galactic latitude of the target object
     """
     table = Table(meta={'name': filename, 'id': 'optical_depth'})
-    if metadata is not None:
-        table.meta.update(metadata)
     table.add_column(Column(name='velocity', data=velocity, unit='m/s', description='LSRK velocity'))
     table.add_column(Column(name='optical_depth', data=opacity, description='Absorption as exp(-tau)'))
     table.add_column(Column(name='flux', data=flux, unit='Jy', description='Flux per beam'))
@@ -245,6 +243,9 @@ def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename,
     table.add_column(Column(name='sigma_smoothed_od', data=sigma_smoothed_od, description='1-sigma noise level in the absorption profile, relative to exp(-tau)'))
 
     votable = from_table(table)
+    if metadata is not None:
+        for key in metadata:
+                votable.infos.append(Info(name=key, value=metadata[key]))
     writeto(votable, filename)
 
 
@@ -351,10 +352,10 @@ def plot_combined_spectrum(velocity, em_mean, em_std, opacity, sigma_optical_dep
     return
 
 def output_spectrum(spec_folder, spectrum_array, opacity, sigma_optical_depth, smoothed_od, sigma_smoothed_od, 
-                    em_mean, em_std, comp_name, src_id, continuum_start_vel, continuum_end_vel):
+                    em_mean, em_std, comp_name, src_id, continuum_start_vel, continuum_end_vel, metadata):
     filename = '{}/{}_spec'.format(spec_folder, comp_name)
 
-    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, em_mean, em_std, filename+'.vot', sigma_optical_depth, smoothed_od, sigma_smoothed_od)
+    save_spectrum(spectrum_array.velocity, opacity, spectrum_array.flux, em_mean, em_std, filename+'.vot', sigma_optical_depth, smoothed_od, sigma_smoothed_od, metadata=metadata)
     spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_optical_depth, range=None)
     spectrum_tools.plot_absorption_spectrum(spectrum_array.velocity, opacity, filename+'_zoom.png', comp_name, continuum_start_vel, continuum_end_vel, sigma_optical_depth, range=(-150,50))
 
@@ -431,7 +432,7 @@ def merge_emission(em_mean, em_std, velocity, interp_em_mean, interp_em_std, fil
     em_std[file_range] = interp_em_std[file_range]
 
 
-def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel):
+def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel, sbid):
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(spectrum.velocity, spectrum.flux, continuum_start_vel, continuum_end_vel)
         opacity = spectrum.flux/mean_cont
         sigma_optical_depth = sd_cont*np.ones(spectrum.velocity.shape)
@@ -463,12 +464,16 @@ def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_star
             print("Reading emission file", filename)
             emission_votable = votable.parse(filename, pedantic=False)
             emission_tab = emission_votable.get_first_table().to_table()
-            file_em_mean, file_em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], emission_tab['velocity'], spectrum.velocity)
+            file_em_mean, file_em_std = match_emission_to_absorption(emission_tab['em_mean'], emission_tab['em_std'], 
+                                                                     emission_tab['velocity'], spectrum.velocity)
             merge_emission(em_mean, em_std, spectrum.velocity, file_em_mean, file_em_std, emission_tab['velocity'])
         
+        # Build the metadata
+        metadata = {'ra':target['ra'], 'dec':target['dec'], 'sd_cont':sd_cont, 'sbid':sbid, 
+                    'src_id':target['id']}
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
-            sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel)
+            sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel, metadata)
 
 
 def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder, spectra_folder, sbid, weighting, 
@@ -506,7 +511,7 @@ def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_tab
         if averaging and averaging > 1:
             spectrum = average_spectrum(spectrum)
 
-        process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
+        process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel, sbid)
 
     return None
 
@@ -559,7 +564,7 @@ def extract_all_island_spectra(targets, file_list, cutouts_folder, selavy_table,
             weighting, target_name=island_name)
         
         # src here is only used for the id so we use the first component
-        process_spectrum(spectrum, comp_list[0], spectra_folder, comp_name, continuum_start_vel, continuum_end_vel)
+        process_spectrum(spectrum, comp_list[0], spectra_folder, comp_name, continuum_start_vel, continuum_end_vel, sbid)
 
     return None
 
@@ -604,7 +609,7 @@ def merge_runs(runs_a, runs_b):
             fullset.append(abs_run)
     return fullset
 
-def calc_tau(min_optical_depth, sigma_min_od):
+def calc_tau(min_optical_depth, sigma_min_od, verbose=False):
     if min_optical_depth > 0:
         peak_tau = -1*np.log(min_optical_depth)
         tau_1_sigma = -1*np.log(min_optical_depth + sigma_min_od)
@@ -615,8 +620,10 @@ def calc_tau(min_optical_depth, sigma_min_od):
         peak_tau = 5
         tau_noise = -1* np.log(sigma_min_od)
         sigma_peak_tau = np.abs(peak_tau - tau_noise)
-    print ("od={:.3f} +- {:.3f} tau={:.2f} +- {:.2f}".format(
-        min_optical_depth, sigma_min_od, peak_tau, sigma_peak_tau))
+
+    if verbose:
+        print ("od={:.3f} +- {:.3f} tau={:.2f} +- {:.2f}".format(
+            min_optical_depth, sigma_min_od, peak_tau, sigma_peak_tau))
     return peak_tau, sigma_peak_tau
 
 def calc_tau_ew(optical_depth, sigma_od, velocity_res):
@@ -635,36 +642,56 @@ def calc_tau_ew(optical_depth, sigma_od, velocity_res):
     return ew, e_ew
 
 def find_continuum_slope(velocity, flux, verbose=False):
-    spectrum = Spectrum1D(flux=flux, spectral_axis=velocity)
-    linear = Linear1D(slope=0.0, intercept=1.0)
+    """
+    Fit the flux spectrum with a linear model to find the slope of the continuum.
+
+    :param velocity The velocity axis in m/s
+    :param flux The flux spectrum
+    """
     with warnings.catch_warnings():  # Ignore warnings
         warnings.simplefilter('ignore')
+        spectrum = Spectrum1D(flux=flux, spectral_axis=velocity, velocity_convention='radio')
+        linear = Linear1D(slope=0.0, intercept=1.0)
         fitted_continuum = fit_continuum(spectrum, model=linear)
     y_fit = fitted_continuum(velocity)
-    angle = math.atan((fitted_continuum.slope/fitted_continuum.intercept).value*1e3)*u.rad.to(u.deg)
+
+    # slope will be in Jy / m/s - divide by continuum level to get units of relative absorption
+    abs_change_per_100kms = (fitted_continuum.slope/fitted_continuum.intercept).to(u.s/u.km) * 100*u.km/u.s 
     if verbose:
-        print ("Angle of {:.2f} deg".format(angle))
-    return fitted_continuum, y_fit, angle
+        print ("change_per_100kms of {:.2f} ".format(abs_change_per_100kms))
+    return fitted_continuum, y_fit, abs_change_per_100kms
+
+
+def report_spectra_stats(src_table, abs_table):
+    for rating in 'ABCDEF':
+        count = np.sum(src_table['rating'] == rating)
+        print ("  Rating {}: {:.0f} sources".format(rating, count))
+
+    hits = np.sum(src_table['has_mw_abs'])
+    print ("  Has MW absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
+    hits = np.sum(src_table['has_other_abs'])
+    print ("  Has other absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
+    print ("  Found {} absorption instances".format(len(abs_table)))
 
 
 def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, source_scaling, cont_range=(-100,-60),
-                    use_smoothed=False):
+                    use_smoothed=False, verbose=False):
 
     date_str = time.strftime('%Y-%m-%d', time.localtime())
 
-    src_table = QTable(names=('id', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
+    src_table = QTable(names=('id', 'sbid', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
             'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag', 'continuum_slope'),
-            dtype=('int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            dtype=('int', 'int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None, 'float64'),
             meta={'name': 'ASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
 
-    abs_table = QTable(names=('id', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
+    abs_table = QTable(names=('src_id', 'sbid', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
             'start_vel', 'end_vel', 'length', 'min_optical_depth', 'e_min_optical_depth', 'peak_tau', 'e_peak_tau', 
             'max_sigma', 'ew', 'e_ew'),
-            dtype=('int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
+            dtype=('int', 'int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
             'int', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
             meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
@@ -672,6 +699,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
     print('Assessing {} spectra'.format(len(targets)))
 
     i = 0
+    num_not_found = 0
     for tgt in targets:
         # TODO: Update to reflect island grouping
         comp_name = tgt['comp_name']
@@ -687,7 +715,9 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
         if not os.path.exists(abs_spec_filename):
-            print ('No absorption spectrum found for {} at {}'.format(comp_name, abs_spec_filename))
+            num_not_found += 1
+            if verbose:
+                print ('No absorption spectrum found for {} at {}'.format(comp_name, abs_spec_filename))
             continue
         abs_spec_votable = parse_single_table(abs_spec_filename)
         abs_spec = abs_spec_votable.to_table()
@@ -711,8 +741,9 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         continuum_start_vel = cont_range[0]*u.km.to(u.m)
         continuum_end_vel = cont_range[1]*u.km.to(u.m)
+
         mean_cont, sd_cont = spectrum_tools.get_mean_continuum(abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
-        fitted_continuum, y_fit, continuum_slope = find_continuum_slope(abs_spec['velocity']/1e3*u.m/u.s, abs_spec['flux']*u.Jy)
+        fitted_continuum, y_fit, continuum_slope = find_continuum_slope(abs_spec['velocity'].quantity, abs_spec['flux']*u.Jy)
         #print (mean_cont, sd_cont, abs_spec['velocity'], abs_spec['flux'], continuum_start_vel, continuum_end_vel)
 
         poor_noise_flag = check_noise(optical_depth, sigma_optical_depth)
@@ -737,27 +768,20 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                 abs_peak_tau, abs_sigma_peak_tau = calc_tau(abs_min_opacity, abs_sigma_min_od)
                 ew, e_ew = calc_tau_ew(feature_optical_depth, feature_sigma_od, velocity_res)
 
-                abs_table.add_row([tgt['id'], tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
+                abs_table.add_row([tgt['id'], sbid, tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
                     rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                     src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
                     abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma, ew, e_ew])
 
         src_pos = SkyCoord( src['ra']*u.deg, src['dec']*u.deg, frame=FK5)
         
-        src_table.add_row([tgt['id'], tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
+        src_table.add_row([tgt['id'], sbid, tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
                         rating, src['flux_peak']*u.Jy, src['flux_int']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                         min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
                         src['b'], src['pa'], 0, poor_noise_flag, continuum_slope])
 
-    for rating in 'ABCDEF':
-        count = np.sum(src_table['rating'] == rating)
-        print ("  Rating {}: {:.0f} sources".format(rating, count))
-
-    hits = np.sum(src_table['has_mw_abs'])
-    print ("  Has MW absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
-    hits = np.sum(src_table['has_other_abs'])
-    print ("  Has other absorption: {:.0f} sources or {:.1f}%".format(hits, 100*hits/len(src_table)))
-    print ("  Found {} absorption instances".format(len(abs_table)))
+    print ("Skipped {} sources which did not have spectra - generally due to flux cutoff.".format(num_not_found))
+    report_spectra_stats(src_table, abs_table)
 
     return src_table, abs_table
 
@@ -794,7 +818,8 @@ def add_col_metadata(vo_table, col_name, description, units=None, ucd=None, data
 
 
 def add_spectra_column_metadata(spectra_vo_table):
-    add_col_metadata(spectra_vo_table, 'id', 'Unique identifier of the source.')
+    add_col_metadata(spectra_vo_table, 'id', 'Unique identifier of the source.', ucd='meta.id')
+    add_col_metadata(spectra_vo_table, 'sbid', 'The id of the scheduling block id in which the source was observed.', ucd='meta.id')
     add_col_metadata(spectra_vo_table, 'comp_name', 'Background source component name.', ucd='meta.id;meta.main')
     add_col_metadata(spectra_vo_table, 'ra', 'J2000 right ascension in decimal degrees.', units='deg', ucd='pos.eq.ra;meta.main')
     add_col_metadata(spectra_vo_table, 'dec', 'J2000 declination in decimal degrees.', units='deg', ucd='pos.eq.dec;meta.main')
@@ -817,11 +842,11 @@ def add_spectra_column_metadata(spectra_vo_table):
     add_col_metadata(spectra_vo_table, 'pa', 'Position angle before deconvolution measured as degrees CCW of North.', units='deg', ucd='phys.angSize;pos.posAng;em.radio;stat.fit')
     add_col_metadata(spectra_vo_table, 'n_h', 'Column density towards the background source excluding Milky Way velocities, from the GASS survey.', units='cm-2', ucd='phys.columnDensity')
     add_col_metadata(spectra_vo_table, 'noise_flag', 'Flag to indicate that the noise for the spectrum may be underestimated.', datatype='boolean')
-    add_col_metadata(spectra_vo_table, 'continuum_slope', 'The angle of the continuum. Expected to be close to zero.', units='deg')
+    add_col_metadata(spectra_vo_table, 'continuum_slope', 'The slope of the continuum, shown as change in relative absorption per 10 km/s. Expected to be close to zero.')
 
 
 def add_absorption_column_metadata(abs_vo_table):
-    add_col_metadata(abs_vo_table, 'id', 'Unique identifier of the absorption feature.')
+    add_col_metadata(abs_vo_table, 'src_id', 'Identifier of the source.', ucd='meta.id')
     add_col_metadata(abs_vo_table, 'comp_name', 'Background source component name.', ucd='meta.id')
     add_col_metadata(abs_vo_table, 'abs_name', 'Absorption feature name.', ucd='meta.id;meta.main')
     add_col_metadata(abs_vo_table, 'ra', 'J2000 right ascension in decimal degrees.', units='deg', ucd='pos.eq.ra;meta.main')
@@ -1202,6 +1227,62 @@ def log_config(args, cutout_folder, figures_folder, spectra_folder):
     print ('')
 
 
+def identify_duplicates(spectra, overlap_sep=6*u.arcsec):
+    # Find sources very close to each other
+    pos1 = SkyCoord(spectra['ra']*u.deg, spectra['dec']*u.deg)
+    pos2 = SkyCoord(spectra['ra']*u.deg, spectra['dec']*u.deg)
+    idx1, idx2, sep, _ = search_around_sky(pos1, pos2, overlap_sep)
+    
+    # Exclude self matches
+    self_match_mask = idx1 >= idx2
+    match1 = spectra[idx1[~self_match_mask]]
+    match2 = spectra[idx2[~self_match_mask]]
+    matches = hstack([match1, match2])
+    return matches, overlap_sep
+
+
+def clean_catalogues(spectra_table, abs_table):
+    # Exclude any spectra with excessive slopes
+    bad_spec_mask = (np.abs(spectra_table['continuum_slope']) > 0.03)
+    bad_src_ids = spectra_table[bad_spec_mask]['id']
+    spectra_table = spectra_table[~bad_spec_mask]
+    bad_abs_mask = np.isin(abs_table['src_id'], bad_src_ids)    
+    abs_table = abs_table[~bad_abs_mask]
+    print ("\nExcluded {} spectra (and their {} absorption features) as they have non flat continuum"
+           .format(np.sum(bad_spec_mask), np.sum(bad_abs_mask)))
+
+    # Identify and exclude duplicates
+    duplicates, overlap_sep = identify_duplicates(spectra_table)
+    ids_to_eliminate = []
+    for row in duplicates:
+        if row['rating_1'] != row['rating_2']:
+            ids_to_eliminate.append(row['id_2'] if row['rating_1'] < row['rating_2'] else row['id_1'])
+        else:
+            ids_to_eliminate.append(row['id_2'] if row['sd_cont_1'] <= row['sd_cont_2'] else row['id_1'])
+    dupe_mask = np.isin(spectra_table['id'], ids_to_eliminate)
+    spectra_table = spectra_table[~dupe_mask]
+    dupe_abs_mask = np.isin(abs_table['src_id'], ids_to_eliminate)    
+    abs_table = abs_table[~dupe_abs_mask]
+    print ("Excluded {} spectra (and their {} absorption features) as they are duplicates of better spectra (within {})"
+           .format(np.sum(dupe_mask), np.sum(dupe_abs_mask), overlap_sep))
+
+    report_spectra_stats(spectra_table, abs_table)
+
+    return spectra_table, abs_table
+
+def write_spectra_votable(spectra_table, filename):
+    spectra_vo_table = from_table(spectra_table)
+    add_spectra_column_metadata(spectra_vo_table)
+    writeto(spectra_vo_table, filename)
+    print ("\nWrote {} spectra to {}".format(len(spectra_table), filename))
+
+
+def write_absorption_votable(abs_table, filename):
+    abs_vo_table = from_table(abs_table)
+    add_absorption_column_metadata(abs_vo_table)
+    writeto(abs_vo_table, filename)
+    print ("Wrote {} absorption features to {}".format(len(abs_table), filename))
+
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
 
@@ -1270,15 +1351,20 @@ def main():
             args.sbid,  is_milky_way, args.source_scaling, cont_range=continuum_range, use_smoothed=args.smooth)
     add_column_density(spectra_table)
 
-    # Save spectra catalogue
-    spectra_vo_table = from_table(spectra_table)
-    add_spectra_column_metadata(spectra_vo_table)
-    writeto(spectra_vo_table, parent_folder+'askap_spectra.vot')
+    # Save raw catalogues
+    filename = parent_folder+'gaskap_sb{}_abs_spectra_raw.vot'.format(args.sbid)
+    write_spectra_votable(spectra_table, filename)
+    filename = parent_folder+'gaskap_sb{}_absorption_raw.vot'.format(args.sbid)
+    write_absorption_votable(abs_table, filename)
 
-    # Save absorption catalogue
-    abs_vo_table = from_table(abs_table)
-    add_absorption_column_metadata(abs_vo_table)
-    writeto(abs_vo_table, parent_folder+'askap_absorption.vot')
+    # Remove duplicates and unreliable data
+    spectra_table, abs_table = clean_catalogues(spectra_table, abs_table)
+
+    # Save final catalogues
+    filename = parent_folder+'gaskap_sb{}_abs_spectra.vot'.format(args.sbid)
+    write_spectra_votable(spectra_table, filename)
+    filename = parent_folder+'gaskap_sb{}_absorption.vot'.format(args.sbid)
+    write_absorption_votable(abs_table, filename)
 
     # Produce consolidated plots
     mom0_file = 'hi_zea_milky_way_mom0.fits' if is_milky_way else 'hi_zea_ms_mom0.fits'
