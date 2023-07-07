@@ -293,7 +293,7 @@ def output_emission_spectra(spectra_table, tb_mean_all, tb_std_all, velocities, 
         comp_name = source['comp_name']
         if np.sum(tb_mean) == 0:
             print ("Source {} has all no emission data".format(comp_name))
-        filename = '{}/{}_emission{}.vot'.format(spectra_folder, comp_name, qual)
+        filename = '{}/{}_emission{}.vot'.format(spectra_folder, comp_name, qualifier)
         output_emission_spectrum(source, comp_name, velocities, tb_mean, tb_std, filename)
 
 def main():
