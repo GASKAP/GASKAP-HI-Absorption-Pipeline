@@ -49,6 +49,10 @@ A typical processing run will use the following steps
 * CASA
 * https://github.com/nipingel/GASKAP_Imaging
 
+## Licences
+
+This project is licensed under the MIT License. However, the files under `support/askap` are licenced under GPL and are included with permission from the ASKAPsoft team.
+
 ## Reference Data
 
 * GASS ZEA cubes
