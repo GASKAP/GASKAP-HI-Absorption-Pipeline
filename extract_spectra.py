@@ -187,10 +187,11 @@ def plot_mom0(fname, comp_name, out_folder, sources):
     # Plot ellipse for each source
     for src in sources:
         print (src)
-        a_deg = src['a']*u.arcsec.to(u.deg)*2
-        b_deg = src['b']*u.arcsec.to(u.deg)*2
+        a_deg = (src['a'] if type(src['a']) is u.Quantity else src['a']*u.arcsec).to(u.deg)*2
+        b_deg = (src['b'] if type(src['b']) is u.Quantity else src['b']*u.arcsec).to(u.deg)*2
+        angle = (src['pa'].to(u.deg).value if type(src['pa']) is u.Quantity else src['pa'])-90
         # src['ra'], src['dec'],                 src['a'], src['a'], src['pa']
-        fig.show_ellipses(src['ra'], src['dec'], a_deg, b_deg, angle=src['pa']-90, edgecolor='red') #, 
+        fig.show_ellipses(src['ra'], src['dec'], a_deg, b_deg, angle=angle, edgecolor='red') #, 
 
     figname = '{}/{}_mom0'.format(out_folder, comp_name)
     #fig.savefig(figname+'.pdf')
@@ -218,7 +219,7 @@ def get_source(file_list, target_name, comp_name, selavy_table, folder=None, sca
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
           'comp_name': comp_name, 'fname': fname, 'flux_peak': comp_cat_row['flux_peak'],
-           'flux_int': comp_cat_row['flux_int']}
+           'flux_int': comp_cat_row['flux_int'], 'component_id': comp_cat_row['component_id']}
     return src
 
 def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename, 
@@ -474,6 +475,7 @@ def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_star
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
             sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel, metadata)
+        return sd_cont
 
 
 def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder, spectra_folder, sbid, weighting, 
@@ -679,13 +681,13 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
     date_str = time.strftime('%Y-%m-%d', time.localtime())
 
-    src_table = QTable(names=('id', 'sbid', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
+    src_table = QTable(names=('id', 'sbid', 'comp_name', 'component_id', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
             'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag', 'continuum_slope'),
-            dtype=('int', 'int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            dtype=('int', 'int', 'U32', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None, 'float64'),
-            meta={'name': 'ASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
+            meta={'name': 'GASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
 
     abs_table = QTable(names=('src_id', 'sbid', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
@@ -694,7 +696,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
             dtype=('int', 'int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
             'int', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
-            meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
+            meta={'name': 'GASKAP Absorption detections for sbid {}'.format(sbid)})
 
     print('Assessing {} spectra'.format(len(targets)))
 
@@ -775,7 +777,7 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         src_pos = SkyCoord( src['ra']*u.deg, src['dec']*u.deg, frame=FK5)
         
-        src_table.add_row([tgt['id'], sbid, tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
+        src_table.add_row([tgt['id'], sbid, tgt['comp_name'], src['component_id'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
                         rating, src['flux_peak']*u.Jy, src['flux_int']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
                         min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
                         src['b'], src['pa'], 0, poor_noise_flag, continuum_slope])
@@ -819,8 +821,9 @@ def add_col_metadata(vo_table, col_name, description, units=None, ucd=None, data
 
 def add_spectra_column_metadata(spectra_vo_table):
     add_col_metadata(spectra_vo_table, 'id', 'Unique identifier of the source.', ucd='meta.id')
-    add_col_metadata(spectra_vo_table, 'sbid', 'The id of the scheduling block id in which the source was observed.', ucd='meta.id')
+    add_col_metadata(spectra_vo_table, 'sbid', 'The id of the scheduling block id in which the source was observed.', ucd='meta.id;obs')
     add_col_metadata(spectra_vo_table, 'comp_name', 'Background source component name.', ucd='meta.id;meta.main')
+    add_col_metadata(spectra_vo_table, 'component_id', 'The id of the background source from the ASKAP Selavy component catalogue.', ucd='meta.id')
     add_col_metadata(spectra_vo_table, 'ra', 'J2000 right ascension in decimal degrees.', units='deg', ucd='pos.eq.ra;meta.main')
     add_col_metadata(spectra_vo_table, 'dec', 'J2000 declination in decimal degrees.', units='deg', ucd='pos.eq.dec;meta.main')
     add_col_metadata(spectra_vo_table, 'rating', 'Quality rating of the absorption spectrum.')
