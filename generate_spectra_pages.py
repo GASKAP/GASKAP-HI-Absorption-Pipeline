@@ -367,7 +367,7 @@ def main():
         print("Error: Folder {} does not exist.".format(parent_folder))
         return 1
 
-    spectra_votable = votable.parse('{}/askap_spectra.vot'.format(parent_folder), pedantic=False)
+    spectra_votable = votable.parse('{}/gaskap_sb{}_abs_spectra.vot'.format(parent_folder, args.sbid), pedantic=False)
     spectra_table = spectra_votable.get_first_table().to_table()
 
     output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {}'.format(
