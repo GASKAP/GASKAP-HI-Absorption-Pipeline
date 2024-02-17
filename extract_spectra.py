@@ -80,9 +80,11 @@ def parseargs():
                                      description="Produce absorption spectra from a set of subcubes")
     parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block to be processed",
                         type=int, required=True)
-    parser.add_argument("-c", "--catalogue", help="The catalgoue of source positions and characteristics",
+    parser.add_argument("-c", "--catalogue", help="The catalogue of source positions and characteristics",
                         required=True)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
+                        required=False)
+    parser.add_argument("-r", "--reference_catalogue", help="The catalogue of sources to be included. Should be a GASKAP HI Absorption spectra catalogue e.g. the averaged catalogue",
                         required=False)
     #parser.add_argument("-e", "--emission", help="The HI emission cube to source emission data around each source.",
     #                    required=False)
@@ -187,10 +189,11 @@ def plot_mom0(fname, comp_name, out_folder, sources):
     # Plot ellipse for each source
     for src in sources:
         print (src)
-        a_deg = src['a']*u.arcsec.to(u.deg)*2
-        b_deg = src['b']*u.arcsec.to(u.deg)*2
+        a_deg = (src['a'] if type(src['a']) is u.Quantity else src['a']*u.arcsec).to(u.deg)*2
+        b_deg = (src['b'] if type(src['b']) is u.Quantity else src['b']*u.arcsec).to(u.deg)*2
+        angle = (src['pa'].to(u.deg).value if type(src['pa']) is u.Quantity else src['pa'])-90
         # src['ra'], src['dec'],                 src['a'], src['a'], src['pa']
-        fig.show_ellipses(src['ra'], src['dec'], a_deg, b_deg, angle=src['pa']-90, edgecolor='red') #, 
+        fig.show_ellipses(src['ra'], src['dec'], a_deg, b_deg, angle=angle, edgecolor='red') #, 
 
     figname = '{}/{}_mom0'.format(out_folder, comp_name)
     #fig.savefig(figname+'.pdf')
@@ -218,7 +221,7 @@ def get_source(file_list, target_name, comp_name, selavy_table, folder=None, sca
     src = {'ra':comp_cat_row['ra_deg_cont'], 'dec':comp_cat_row['dec_deg_cont'], 
            'a':comp_cat_row['maj_axis']/2*scaling_factor, 'b':comp_cat_row['min_axis']/2*scaling_factor, 'pa': comp_cat_row['pos_ang'],
           'comp_name': comp_name, 'fname': fname, 'flux_peak': comp_cat_row['flux_peak'],
-           'flux_int': comp_cat_row['flux_int']}
+           'flux_int': comp_cat_row['flux_int'], 'component_id': comp_cat_row['component_id']}
     return src
 
 def save_spectrum(velocity, opacity, flux, em_mean, em_std, filename, 
@@ -291,15 +294,15 @@ target_name=None):
     return spectrum_array
 
 
-def average_array(values, num_chan=4):
+def average_array(values, num_chan):
     # Pad with nans to be a multiple of the number of channels
     padded = np.r_[values, math.nan + np.zeros((-len(values) % num_chan,))]
     return np.nanmean(padded.reshape(-1, num_chan), axis=-1)
 
 
-def average_spectrum(spectrum):
-    velocity = average_array(spectrum['velocity'])
-    flux = average_array(spectrum['flux'])
+def average_spectrum(spectrum, num_chan):
+    velocity = average_array(spectrum['velocity'], num_chan)
+    flux = average_array(spectrum['flux'], num_chan)
     avg_spectrum = rec.fromarrays(
         [np.arange(velocity.size), velocity, flux],
         names='plane,velocity,flux')
@@ -474,6 +477,7 @@ def process_spectrum(spectrum, target, spectra_folder, comp_name, continuum_star
 
         output_spectrum(spectra_folder, spectrum, opacity, sigma_optical_depth, hann_smoothed, 
             sigma_optical_depth_smooth, em_mean, em_std, comp_name, target['id'], continuum_start_vel, continuum_end_vel, metadata)
+        return sd_cont
 
 
 def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_table, figures_folder, spectra_folder, sbid, weighting, 
@@ -509,7 +513,7 @@ def extract_all_component_spectra(targets, file_list, cutouts_folder, selavy_tab
         spectrum = extract_spectrum(src['fname'], src, continuum_start_vel, continuum_end_vel, figures_folder, weighting)
         
         if averaging and averaging > 1:
-            spectrum = average_spectrum(spectrum)
+            spectrum = average_spectrum(spectrum, averaging)
 
         process_spectrum(spectrum, tgt, spectra_folder, comp_name, continuum_start_vel, continuum_end_vel, sbid)
 
@@ -674,18 +678,16 @@ def report_spectra_stats(src_table, abs_table):
     print ("  Found {} absorption instances".format(len(abs_table)))
 
 
-def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, source_scaling, cont_range=(-100,-60),
-                    use_smoothed=False, verbose=False):
-
+def define_spectra_tables(sbid):
     date_str = time.strftime('%Y-%m-%d', time.localtime())
 
-    src_table = QTable(names=('id', 'sbid', 'comp_name', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
+    src_table = QTable(names=('id', 'sbid', 'comp_name', 'component_id', 'ra', 'dec', 'glon', 'glat', 'rating', 'flux_peak', 'flux_int', 
             'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'min_opacity', 'vel_min_opacity', 'peak_tau', 'e_peak_tau', 
             'has_mw_abs', 'has_other_abs', 'semi_maj_axis', 'semi_min_axis', 'pa', 'n_h', 'noise_flag', 'continuum_slope'),
-            dtype=('int', 'int', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
-            'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', None, 'float64'),
-            meta={'name': 'ASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
+            dtype=('int', 'int', 'U32', 'U32', 'float64', 'float64', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 
+            'float64', 'float64', 'float64', 'float64', 'float64', 'bool', 'bool', 'float64', 'float64', 'float64', 'float64', 'bool', 'float64'),
+            meta={'name': 'GASKAP Spectra for sbid {} as at {}'.format(sbid, date_str)})
 
     abs_table = QTable(names=('src_id', 'sbid', 'comp_name', 'abs_name', 'ra', 'dec', 'rating', 'flux_peak', 'mean_cont', 'sd_cont', 'opacity_range', 
             'max_s_max_n', 'max_noise', 'num_chan_noise', 'semi_maj_axis', 'semi_min_axis', 'pa', 
@@ -694,34 +696,13 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
             dtype=('int', 'int', 'U32', 'U32', 'float64', 'float64', 'str', 'float64', 'float64', 'float64', 'float64', 
             'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64',
             'int', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64', 'float64'),
-            meta={'name': 'ASKAP Absorption detections for sbid {}'.format(sbid)})
+            meta={'name': 'GASKAP Absorption detections for sbid {} as at {}'.format(sbid, date_str)})
+    return src_table, abs_table
 
-    print('Assessing {} spectra'.format(len(targets)))
+def to_unit(value, unit):
+    return value.to(unit) if value is u.Quantity else value*unit
 
-    i = 0
-    num_not_found = 0
-    for tgt in targets:
-        # TODO: Update to reflect island grouping
-        comp_name = tgt['comp_name']
-
-        #if comp_name not in ['J163451-473658', 'J163439-473604']:
-        #    continue
-        # TODO: first param should be island name when using island grouping
-        src = get_source(file_list, comp_name, comp_name, selavy_table, scaling_factor=source_scaling)
-        if not src:
-            print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
-            continue
-        #print(src)
-
-        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
-        if not os.path.exists(abs_spec_filename):
-            num_not_found += 1
-            if verbose:
-                print ('No absorption spectrum found for {} at {}'.format(comp_name, abs_spec_filename))
-            continue
-        abs_spec_votable = parse_single_table(abs_spec_filename)
-        abs_spec = abs_spec_votable.to_table()
-
+def assess_single_spectrum(tgt, src, abs_spec, src_table, abs_table, sbid, is_milky_way, use_smoothed, cont_range):
         optical_depth = abs_spec['smoothed_od'] if use_smoothed else abs_spec['optical_depth'] if 'optical_depth' in abs_spec.colnames else abs_spec['opacity']
         sigma_optical_depth = abs_spec['sigma_smoothed_od'] if use_smoothed else abs_spec['sigma_od'] if 'sigma_od' in abs_spec.colnames else abs_spec['sigma_opacity']
         if is_milky_way:
@@ -750,6 +731,10 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
 
         rating, opacity_range, max_s_max_n = spectrum_tools.rate_spectrum(optical_depth, np.mean(sigma_optical_depth))
 
+        ra_deg = (src['ra'] if type(src['ra']) is u.Quantity else src['ra']*u.deg)
+        dec_deg = (src['dec'] if type(src['dec']) is u.Quantity else src['dec']*u.deg)
+        flux_peak = (src['flux_peak'] if type(src['flux_peak']) is u.Quantity else src['flux_peak']*u.Jy)
+
         has_mw_abs = False
         has_other_abs = False
         runs = find_runs(abs_spec, optical_depth, sigma_optical_depth, min_sigma=[3, 2.8], min_len=2) # was 2 for HI or 3 for OH
@@ -768,17 +753,51 @@ def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_fol
                 abs_peak_tau, abs_sigma_peak_tau = calc_tau(abs_min_opacity, abs_sigma_min_od)
                 ew, e_ew = calc_tau_ew(feature_optical_depth, feature_sigma_od, velocity_res)
 
-                abs_table.add_row([tgt['id'], sbid, tgt['comp_name'], abs_name, src['ra']*u.deg, src['dec']*u.deg, 
-                    rating, src['flux_peak']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
-                    src['a'], src['b'], src['pa'], absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
+                abs_table.add_row([tgt['id'], sbid, tgt['comp_name'], abs_name, ra_deg, dec_deg, 
+                    rating, src['flux_peak'], mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
+                    to_unit(src['a'],u.arcsec), to_unit(src['b'],u.arcsec), to_unit(src['pa'],u.deg), absrow.start_vel*u.km/u.s, absrow.end_vel*u.km/u.s, absrow.length, 
                     abs_min_opacity, abs_sigma_min_od, abs_peak_tau, abs_sigma_peak_tau, absrow.max_sigma, ew, e_ew])
 
-        src_pos = SkyCoord( src['ra']*u.deg, src['dec']*u.deg, frame=FK5)
+        src_pos = SkyCoord( ra_deg, dec_deg, frame=FK5)
         
-        src_table.add_row([tgt['id'], sbid, tgt['comp_name'], src['ra']*u.deg, src['dec']*u.deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
-                        rating, src['flux_peak']*u.Jy, src['flux_int']*u.Jy, mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
-                        min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, src['a'], 
-                        src['b'], src['pa'], 0, poor_noise_flag, continuum_slope])
+        src_table.add_row([tgt['id'], sbid, tgt['comp_name'], src['component_id'], ra_deg, dec_deg, src_pos.galactic.l.deg, src_pos.galactic.b.deg,
+                        rating, to_unit(src['flux_peak'],u.Jy), to_unit(src['flux_int'],u.Jy), mean_cont*u.Jy, sd_cont, opacity_range, max_s_max_n, max_opacity, num_noise, 
+                        min_opacity, vel_min_opacity, peak_tau, sigma_peak_tau, has_mw_abs, has_other_abs, to_unit(src['a'],u.arcsec), 
+                        to_unit(src['b'],u.arcsec), to_unit(src['pa'],u.deg), 0, poor_noise_flag, continuum_slope])
+
+
+def assess_spectra(targets, file_list, selavy_table, figures_folder, spectra_folder, sbid, is_milky_way, source_scaling, cont_range=(-100,-60),
+                    use_smoothed=False, verbose=False):
+
+    src_table, abs_table = define_spectra_tables(sbid)
+
+    print('Assessing {} spectra'.format(len(targets)))
+
+    i = 0
+    num_not_found = 0
+    for tgt in targets:
+        # TODO: Update to reflect island grouping
+        comp_name = tgt['comp_name']
+
+        #if comp_name not in ['J163451-473658', 'J163439-473604']:
+        #    continue
+        # TODO: first param should be island name when using island grouping
+        src = get_source(file_list, comp_name, comp_name, selavy_table, scaling_factor=source_scaling)
+        if not src:
+            print('Skipping missing src #{} {}'.format(tgt['id'], tgt['comp_name']))
+            continue
+        #print(src)
+
+        abs_spec_filename = '{}/{}_spec.vot'.format(spectra_folder, comp_name)
+        if not os.path.exists(abs_spec_filename):
+            num_not_found += 1
+            if verbose:
+                print ('No absorption spectrum found for {} at {}'.format(comp_name, abs_spec_filename))
+            continue
+        abs_spec_votable = parse_single_table(abs_spec_filename)
+        abs_spec = abs_spec_votable.to_table()
+
+        assess_single_spectrum(tgt, src, abs_spec, src_table, abs_table, sbid, is_milky_way, use_smoothed, cont_range)
 
     print ("Skipped {} sources which did not have spectra - generally due to flux cutoff.".format(num_not_found))
     report_spectra_stats(src_table, abs_table)
@@ -819,8 +838,9 @@ def add_col_metadata(vo_table, col_name, description, units=None, ucd=None, data
 
 def add_spectra_column_metadata(spectra_vo_table):
     add_col_metadata(spectra_vo_table, 'id', 'Unique identifier of the source.', ucd='meta.id')
-    add_col_metadata(spectra_vo_table, 'sbid', 'The id of the scheduling block id in which the source was observed.', ucd='meta.id')
+    add_col_metadata(spectra_vo_table, 'sbid', 'The id of the scheduling block id in which the source was observed.', ucd='meta.id;obs')
     add_col_metadata(spectra_vo_table, 'comp_name', 'Background source component name.', ucd='meta.id;meta.main')
+    add_col_metadata(spectra_vo_table, 'component_id', 'The id of the background source from the ASKAP Selavy component catalogue.', ucd='meta.id')
     add_col_metadata(spectra_vo_table, 'ra', 'J2000 right ascension in decimal degrees.', units='deg', ucd='pos.eq.ra;meta.main')
     add_col_metadata(spectra_vo_table, 'dec', 'J2000 declination in decimal degrees.', units='deg', ucd='pos.eq.dec;meta.main')
     add_col_metadata(spectra_vo_table, 'rating', 'Quality rating of the absorption spectrum.')
@@ -1211,6 +1231,7 @@ def log_config(args, cutout_folder, figures_folder, spectra_folder):
     print (' {: >20} : {}'.format('sbid', args.sbid))
     print (' {: >20} : {}'.format('catalogue', args.catalogue))
     print (' {: >20} : {}'.format('parent', args.parent))
+    print (' {: >20} : {}'.format('reference_catalogue', args.reference_catalogue))
     print (' {: >20} : {}'.format('skip_abs', args.skip_abs))
     print (' {: >20} : {}'.format('continuum_start', args.continuum_start))
     print (' {: >20} : {}'.format('continuum_end', args.continuum_end))
@@ -1241,6 +1262,20 @@ def identify_duplicates(spectra, overlap_sep=6*u.arcsec):
     return matches, overlap_sep
 
 
+def match_catalogues(spectra_table, abs_table, reference_catalogue):
+    ref_spec_cat_votable = parse_single_table(reference_catalogue)
+    ref_spec_avg_dat = ref_spec_cat_votable.to_table()
+    keep_mask = np.isin(spectra_table['component_id'], ref_spec_avg_dat['component_id'])
+    spectra_table = spectra_table[keep_mask]
+    keep_abs_mask = np.isin(abs_table['src_id'], spectra_table['id'])    
+    abs_table = abs_table[keep_abs_mask]
+    print ("Excluded {} spectra (and their {} absorption features) as they were not in the reference catalogue."
+        .format(np.sum(~keep_mask), np.sum(~keep_abs_mask)))
+    report_spectra_stats(spectra_table, abs_table)
+
+    return spectra_table, abs_table
+
+
 def clean_catalogues(spectra_table, abs_table):
     # Exclude any spectra with excessive slopes
     bad_spec_mask = (np.abs(spectra_table['continuum_slope']) > 0.03)
@@ -1256,9 +1291,14 @@ def clean_catalogues(spectra_table, abs_table):
     ids_to_eliminate = []
     for row in duplicates:
         if row['rating_1'] != row['rating_2']:
-            ids_to_eliminate.append(row['id_2'] if row['rating_1'] < row['rating_2'] else row['id_1'])
+            first_better = row['rating_1'] < row['rating_2']
+            #ids_to_eliminate.append(row['id_2'] if row['rating_1'] < row['rating_2'] else row['id_1'])
         else:
-            ids_to_eliminate.append(row['id_2'] if row['sd_cont_1'] <= row['sd_cont_2'] else row['id_1'])
+            first_better = row['flux_peak_1'] >= row['flux_peak_2']
+            #ids_to_eliminate.append(row['id_2'] if row['sd_cont_1'] <= row['sd_cont_2'] else row['id_1'])
+        ids_to_eliminate.append(row['id_2'] if first_better else row['id_1'])
+        print ('  Source {} is dimmer than {}'.format(row['comp_name_2'] if first_better else row['comp_name_1'], 
+                                                   row['comp_name_1'] if first_better else row['comp_name_2']))
     dupe_mask = np.isin(spectra_table['id'], ids_to_eliminate)
     spectra_table = spectra_table[~dupe_mask]
     dupe_abs_mask = np.isin(abs_table['src_id'], ids_to_eliminate)    
@@ -1282,6 +1322,7 @@ def write_absorption_votable(abs_table, filename):
     add_absorption_column_metadata(abs_vo_table)
     writeto(abs_vo_table, filename)
     print ("Wrote {} absorption features to {}".format(len(abs_table), filename))
+
 
 def main():
     warnings.simplefilter('ignore', category=AstropyWarning)
@@ -1358,7 +1399,10 @@ def main():
     write_absorption_votable(abs_table, filename)
 
     # Remove duplicates and unreliable data
-    spectra_table, abs_table = clean_catalogues(spectra_table, abs_table)
+    if args.reference_catalogue:
+        spectra_table, abs_table = match_catalogues(spectra_table, abs_table, args.reference_catalogue)
+    else:
+        spectra_table, abs_table = clean_catalogues(spectra_table, abs_table)
 
     # Save final catalogues
     filename = parent_folder+'gaskap_sb{}_abs_spectra.vot'.format(args.sbid)
