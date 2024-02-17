@@ -20,14 +20,32 @@ def parseargs():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      description="Produce preview pages for a set of spectra")
     parser.add_argument("-s", "--sbid", help="The id of the ASKAP scheduling block",
-                        type=int, required=True)
+                        type=int, required=False)
+    parser.add_argument("-f", "--field", help="The id of the GASKAP field",
+                        type=str, required=False)
     parser.add_argument("-g", "--good", help="The sigma threshold for spectra to be included in the detections.html page",
                         type=float, default=3.0)
     parser.add_argument("-b", "--best", help="The sigma threshold for spectra to be included in the best.html page",
                         type=float, default=5.0)
     parser.add_argument("-p", "--parent", help="The parent folder for the processing, will default to sbnnn/ where nnn is the sbid.",
                         required=False)
+    parser.add_argument("-c", "--catalog", help="The specytra catalgo to be used, requred for fields.",
+                        required=False)
     args = parser.parse_args()
+
+    if args.sbid and args.field:
+        print("Error: Either an sbid or a field must be provided, but not both.")
+        parser.print_usage()
+        return 1
+    if not args.sbid and not args.field:
+        print("Error: Either an sbid or a field must be provided.")
+        parser.print_usage()
+        return 1
+    if args.field and not args.catalog:
+        print("Error: The catalog must be specified when a field is provided.")
+        parser.print_usage()
+        return 1
+
     return args
 
 def output_header(f, title):
@@ -131,7 +149,7 @@ def output_j19_img(f, gaskap_name, j19_name, rating, sep=None):
     return
 
 
-def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=False, has_mw_abs=False, 
+def output_spectra(table, title, filename, threshold=None, has_other_abs=False, has_mw_abs=False, 
         verbose=False, source_map=None, max_noise=None):
     print (title, filename)
     with open(filename, 'w') as f:
@@ -174,7 +192,7 @@ def output_spectra(sbid, table, title, filename, threshold=None, has_other_abs=F
         output_footer(f)
 
 
-def output_listed_spectra(sbid, table, title, filename, comp_names_list, verbose=False, source_map=None, zoomed=True):
+def output_listed_spectra(table, title, filename, comp_names_list, verbose=False, source_map=None, zoomed=True):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
@@ -211,7 +229,7 @@ def output_listed_spectra(sbid, table, title, filename, comp_names_list, verbose
         output_footer(f)
 
 
-def output_diff_sigma_spectra(sbid, table, title, filename, verbose=False, source_map=None, zoomed=True):
+def output_diff_sigma_spectra(table, title, filename, verbose=False, source_map=None, zoomed=True):
     print (title, filename)
     with open(filename, 'w') as f:
         output_header(f, title)
@@ -302,7 +320,7 @@ def find_j19_matches(gaskap_table, no_match_cat=None):
     return j19_table, idx_j19, d2d_j19, matched, j19_unmatched
 
 
-def output_j19_comparison(sbid, gaskap_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched, title, filename, match_cat=None): 
+def output_j19_comparison(gaskap_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched, title, filename, match_cat=None): 
     print (title, filename)
 
     gaskap_targets = gaskap_table[j19_match]
@@ -357,44 +375,52 @@ def main():
     args = parseargs()
 
     start = time.time()
-    print("#### Started generating spectra pages for sbid {} at {} ####".format(args.sbid,
+    target = 'sbid {}'.format(args.sbid) if args.sbid else 'field {}'.format(args.field)
+    print("#### Started generating spectra pages for {} at {} ####".format(target,
           time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start))))
 
-    parent_folder = 'sb{}/'.format(args.sbid)
+    parent_folder = 'sb{}/'.format(args.sbid) if args.sbid else args.field
     if args.parent:
         parent_folder = args.parent
     if not os.path.exists(parent_folder):
         print("Error: Folder {} does not exist.".format(parent_folder))
         return 1
 
-    spectra_votable = votable.parse('{}/gaskap_sb{}_abs_spectra.vot'.format(parent_folder, args.sbid), pedantic=False)
+    if args.sbid:
+        title_prefix = 'Absorption spectra for SBID {}'.format(args.sbid)
+    else:
+        title_prefix = 'Absorption spectra for field {}'.format(args.field)
+
+    catalog = args.catalog if args.catalog else '{}/gaskap_sb{}_abs_spectra.vot'.format(parent_folder, args.sbid)
+    spectra_votable = votable.parse(catalog, pedantic=False)
     spectra_table = spectra_votable.get_first_table().to_table()
+    if args.field:
+        spectra_table = spectra_table[spectra_table['field']==args.field]
 
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {}'.format(
-        args.sbid), '{}/all.html'.format(parent_folder))
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with non MW absorption features'.format(
-        args.sbid, args.good), '{}/detections.html'.format(parent_folder), has_other_abs=True)
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with {}σ candidate detections'.format(
-        args.sbid, args.best), '{}/best.html'.format(parent_folder), threshold=args.best)
+    output_spectra(spectra_table, title_prefix, '{}/all.html'.format(parent_folder))
+    output_spectra(spectra_table, '{} with non MW absorption features'.format(title_prefix, 
+        args.good), '{}/detections.html'.format(parent_folder), has_other_abs=True)
+    output_spectra(spectra_table, '{} with {}σ candidate detections'.format(title_prefix, 
+        args.best), '{}/best.html'.format(parent_folder), threshold=args.best)
 
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with MW absorption features'.format(
-        args.sbid, args.best), '{}/mw_detections.html'.format(parent_folder), has_mw_abs=True)
+    output_spectra(spectra_table, '{} with MW absorption features'.format(title_prefix,
+        args.best), '{}/mw_detections.html'.format(parent_folder), has_mw_abs=True)
 
     max_noise=0.03
-    output_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with less than {} noise level'.format(
-        args.sbid, max_noise), '{}/quiet.html'.format(parent_folder), max_noise=max_noise)
+    output_spectra(spectra_table, '{} with less than {} noise level'.format(title_prefix, 
+        max_noise), '{}/quiet.html'.format(parent_folder), max_noise=max_noise)
 
     if args.sbid == 10944:
-        output_diff_sigma_spectra(args.sbid, spectra_table, 'Comparison of sigma cutoffs', '{}/sigmacomp.html'.format(parent_folder))
+        output_diff_sigma_spectra(spectra_table, 'Comparison of sigma cutoffs', '{}/sigmacomp.html'.format(parent_folder))
 
         missed_sources = ['J005448-725353', 'J010532-721331', 'J005014-730326', 'J012924-733153', 'J005217-730157', 'J010556-714607', 'J005141-725545', 'J004306-732828', 'J010401-720206', 
             'J010359-720144', 'J010404-720145', 'J013032-731741', 'J003524-732223', 'J010919-725600', 'J013218-715348', 'J004718-723947', 'J010431-720726', 'J005116-734000', 'J003037-742903', 
             'J003037-742901', 'J012733-713639', 'J010932-713453', 'J003936-742018', 'J004808-741206', 'J002411-735717', 'J002143-741500']
-        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} excluded by changed noise'.format(
+        output_listed_spectra(spectra_table, 'Absorption spectra for SBID {} excluded by changed noise'.format(
             args.sbid), '{}/excluded.html'.format(parent_folder), missed_sources)
 
         wide_added = ['J012639-731502', 'J012639-731502', 'J005644-725200', 'J011408-732006', 'J005217-730157']
-        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} added by using 3 channels with 2.3 sigma match'.format(
+        output_listed_spectra(spectra_table, 'Absorption spectra for SBID {} added by using 3 channels with 2.3 sigma match'.format(
             args.sbid), '{}/wide.html'.format(parent_folder), wide_added)
 
         bad_noise = ['J003749-735128',
@@ -402,18 +428,18 @@ def main():
             'J013134-700042',
             'J013742-733050',
             'J014105-722748']
-        output_listed_spectra(args.sbid, spectra_table, 'Absorption spectra for SBID {} with poor noise estimates'.format(
+        output_listed_spectra(spectra_table, 'Absorption spectra for SBID {} with poor noise estimates'.format(
             args.sbid), '{}/bad_noise.html'.format(parent_folder), bad_noise)
 
     if args.sbid in (8906, 10941, 10944):
         j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched = find_j19_matches(spectra_table, no_match_cat='{}/j19_not_matched.vot'.format(parent_folder))
-        output_j19_comparison(args.sbid, spectra_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched,
+        output_j19_comparison(spectra_table, j19_table, idx_j19, d2d_j19, j19_match, j19_unmatched,
             'Absorption spectra for SBID {} also in Jameson 19'.format(args.sbid), '{}/j19.html'.format(parent_folder), match_cat='{}/askap_spectra_in_j19.vot'.format(parent_folder))
         non_j19_table = gaskap_targets = spectra_table[~j19_match]
         print (len(non_j19_table))
-        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with absorption features'.format(
+        output_spectra(non_j19_table, 'Absorption spectra for SBID {} not in J19 with absorption features'.format(
             args.sbid), '{}/non_j19_detections.html'.format(parent_folder), has_other_abs=True, source_map='figures/source_loc_nonj19.png')
-        output_spectra(args.sbid, non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
+        output_spectra(non_j19_table, 'Absorption spectra for SBID {} not in J19 with {}σ candidate detections'.format(
             args.sbid, args.best), '{}/non_j19_best.html'.format(parent_folder), threshold=args.best, source_map='figures/source_loc_nonj19.png')
 
     # Report

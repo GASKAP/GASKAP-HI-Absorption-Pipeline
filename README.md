@@ -22,6 +22,7 @@ It will monitor the progress of jobs, record which ones have succeeded and faile
 1. `extract_pb_emission.py` - Python script that uses astropy to produce primary beam emission spectra for a set of sources
 1. `extract_spectra.py` - Produce absorption spectra from a set of subcubes
 1. `generate_spectra_pages.py` - Create a set of web pages suitable for browsing the spectra for an observation.
+1. `merge_obs.py` - Create a field-based set of spectra from a sequence of observation spectra sets. This will stack any cutouts from repeat observations of a field or from overlapping observations.
 
 ## Typical process
 
